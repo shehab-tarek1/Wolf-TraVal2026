@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>لوحة التحكم المستقلة | Wolf TraVal</title>
+    <title>لوحة التحكم | Wolf TraVal</title>
 
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;900&display=swap" rel="stylesheet">
@@ -40,33 +40,47 @@
 
         const tripsPath = `artifacts/${firebaseConfig.projectId}/public/data/trips`; 
         const bannerPath = `artifacts/${firebaseConfig.projectId}/public/data/banner`; 
+        const statsPath = `artifacts/${firebaseConfig.projectId}/public/data/stats`;
 
         let db, auth;
         let tripsData = [], bannerData = [];
         let isEditing = false, editTripId = null, oldImages = [];
+        let toastTimeout = null;
 
         const app = initializeApp(firebaseConfig);
         db = getFirestore(app);
         auth = getAuth(app);
 
-        // Toast Messages
+        // إصلاح مشكلة تعليق الإشعار
         window.showToast = function(msg, type = "success") {
             const toast = document.getElementById('admin-toast');
             const icon = document.getElementById('toast-icon');
             const text = document.getElementById('toast-text');
             
-            toast.className = `fixed bottom-5 left-5 z-50 flex items-center gap-3 px-4 py-3 rounded-xl shadow-2xl border text-sm transition-all duration-300 transform translate-y-0 opacity-100 ${
-                type === 'error' ? 'bg-red-950/90 border-red-500 text-red-200' : 'bg-teal-950/90 border-teal-500 text-teal-200'
-            }`;
+            if (toastTimeout) clearTimeout(toastTimeout);
+
+            toast.classList.remove('hidden');
+            requestAnimationFrame(() => {
+                toast.className = `fixed bottom-5 left-1/2 -translate-x-1/2 md:left-5 md:translate-x-0 z-50 flex items-center gap-3 px-4 py-3 rounded-xl shadow-2xl border text-xs font-bold transition-all duration-300 opacity-100 translate-y-0 ${
+                    type === 'error' ? 'bg-red-950 border-red-500 text-red-200' : 'bg-teal-950 border-teal-500 text-teal-200'
+                }`;
+            });
+
             icon.className = `fas ${type === 'error' ? 'fa-exclamation-circle text-red-400' : 'fa-check-circle text-teal-400'}`;
             text.textContent = msg;
 
-            setTimeout(() => {
-                toast.classList.add('translate-y-10', 'opacity-0');
-            }, 3500);
+            toastTimeout = setTimeout(() => {
+                toast.classList.add('opacity-0', 'translate-y-4');
+                setTimeout(() => toast.classList.add('hidden'), 300);
+            }, 3000);
         };
 
-        // Thumbnail helpers for admin (Fast w_400)
+        window.hideToastNow = function() {
+            const toast = document.getElementById('admin-toast');
+            toast.classList.add('opacity-0', 'translate-y-4');
+            setTimeout(() => toast.classList.add('hidden'), 300);
+        };
+
         function getAdminThumb(url) {
             if (!url) return 'https://via.placeholder.com/400x250';
             if (url.includes('cloudinary.com')) {
@@ -80,15 +94,17 @@
 
         function isVideo(url) { return url.match(/\.(mp4|webm|ogg|mov)$/i) || url.includes('/video/upload/'); }
 
+        // رفع مباشر بدون معالجات محلية تبطئ العملية
         async function uploadToCloudinary(file) {
-            const formData = new FormData(); formData.append('file', file); formData.append('upload_preset', UPLOAD_PRESET);
+            const formData = new FormData();
+            formData.append('file', file);
+            formData.append('upload_preset', UPLOAD_PRESET);
             const response = await fetch(CLOUDINARY_URL, { method: 'POST', body: formData });
             if (!response.ok) throw new Error("فشل الرفع");
             const data = await response.json();
             return data.secure_url;
         }
 
-        // Auth state
         onAuthStateChanged(auth, (user) => {
             const loginView = document.getElementById('view-login');
             const appView = document.getElementById('view-app');
@@ -127,7 +143,6 @@
             window.location.reload();
         };
 
-        // Tabs switcher (No Popups!)
         window.switchTab = function(tabName) {
             document.querySelectorAll('.tab-content').forEach(el => el.classList.add('hidden'));
             document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
@@ -137,31 +152,40 @@
             if (targetContent) targetContent.classList.remove('hidden');
             if (targetBtn) targetBtn.classList.add('active');
 
-            // Scroll smoothly to top of workspace
             window.scrollTo({ top: 0, behavior: 'smooth' });
         };
 
         function initData() {
+            // رحلات
             onSnapshot(query(collection(db, tripsPath), orderBy("createdAt", "desc")), (snap) => {
                 tripsData = []; snap.forEach(doc => tripsData.push({ id: doc.id, ...doc.data() }));
                 renderTripsTable();
-                updateStats();
+                updateStatsNumbers();
             });
 
+            // معرض
             onSnapshot(query(collection(db, bannerPath), orderBy("createdAt", "desc")), (snap) => {
                 bannerData = []; snap.forEach(doc => bannerData.push({ id: doc.id, ...doc.data() }));
                 renderBannerGrid();
-                updateStats();
+                updateStatsNumbers();
+            });
+
+            // زوار وحجوزات حقيقية
+            onSnapshot(doc(db, statsPath, 'general'), (docSnap) => {
+                if (docSnap.exists()) {
+                    const data = docSnap.data();
+                    document.getElementById('stat-visitors-count').textContent = (data.visitors || 0).toLocaleString();
+                    document.getElementById('stat-bookings-count').textContent = (data.bookings || 0).toLocaleString();
+                }
             });
         }
 
-        function updateStats() {
+        function updateStatsNumbers() {
             document.getElementById('stat-total-trips').textContent = tripsData.length;
             document.getElementById('stat-active-trips').textContent = tripsData.filter(t => t.status !== 'expired').length;
             document.getElementById('stat-gallery-count').textContent = bannerData.length;
         }
 
-        // Render Trips Table with Inline Delete Prompt
         function renderTripsTable() {
             const container = document.getElementById('trips-table-body');
             if (!tripsData.length) {
@@ -178,41 +202,39 @@
                 <tr id="trip-row-${trip.id}" class="border-b border-gray-800 hover:bg-gray-800/40 transition">
                     <td class="py-3 px-4">
                         <div class="flex items-center gap-3">
-                            <div class="relative w-14 h-14 flex-shrink-0 rounded-lg overflow-hidden border border-gray-700 bg-gray-900">
+                            <div class="relative w-12 h-12 flex-shrink-0 rounded-lg overflow-hidden border border-gray-700 bg-gray-900">
                                 <img src="${thumb}" class="w-full h-full object-cover">
-                                ${isVid ? '<span class="absolute bottom-1 right-1 bg-black/80 text-teal-400 p-0.5 rounded text-[9px]"><i class="fas fa-video"></i></span>' : ''}
+                                ${isVid ? '<span class="absolute bottom-1 right-1 bg-black/80 text-teal-400 p-0.5 rounded text-[8px]"><i class="fas fa-video"></i></span>' : ''}
                             </div>
                             <div>
-                                <span class="font-bold text-white text-sm block">${trip.title}</span>
-                                <span class="text-xs text-gray-400"><i class="fas fa-map-marker-alt text-teal-500 ml-1"></i>${trip.location || 'غير محدد'}</span>
+                                <span class="font-bold text-white text-xs md:text-sm block leading-tight">${trip.title}</span>
+                                <span class="text-[11px] text-gray-400"><i class="fas fa-map-marker-alt text-teal-500 ml-1"></i>${trip.location || 'غير محدد'}</span>
                             </div>
                         </div>
                     </td>
-                    <td class="py-3 px-4 text-sm font-semibold text-teal-400">${trip.price} ج.م</td>
+                    <td class="py-3 px-4 text-xs font-semibold text-teal-400 whitespace-nowrap">${trip.price} ج.م</td>
                     <td class="py-3 px-4">
-                        <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold ${isExp ? 'bg-red-900/40 text-red-400 border border-red-500/30' : 'bg-green-900/40 text-green-400 border border-green-500/30'}">
+                        <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold ${isExp ? 'bg-red-900/40 text-red-400 border border-red-500/30' : 'bg-green-900/40 text-green-400 border border-green-500/30'}">
                             ${isExp ? 'منتهية' : 'نشطة'}
                         </span>
                     </td>
-                    <td class="py-3 px-4 text-xs text-gray-400">${trip.departureDate ? new Date(trip.departureDate).toLocaleDateString('ar-EG') : 'غير محدد'}</td>
-                    <td class="py-3 px-4">
-                        <!-- منطقة الإجراءات العادية -->
+                    <td class="py-3 px-4 text-[11px] text-gray-400 whitespace-nowrap">${trip.departureDate ? new Date(trip.departureDate).toLocaleDateString('ar-EG') : 'غير محدد'}</td>
+                    <td class="py-3 px-4 whitespace-nowrap">
                         <div id="actions-default-${trip.id}" class="flex items-center gap-1.5 justify-end">
-                            <button onclick="toggleTripStatus('${trip.id}', '${isExp ? 'active' : 'expired'}')" class="p-2 rounded-lg text-xs bg-gray-800 hover:bg-gray-700 text-yellow-400 border border-gray-700" title="تبديل الحالة">
+                            <button onclick="toggleTripStatus('${trip.id}', '${isExp ? 'active' : 'expired'}')" class="p-1.5 rounded-lg text-xs bg-gray-800 hover:bg-gray-700 text-yellow-400 border border-gray-700" title="تبديل الحالة">
                                 <i class="fas ${isExp ? 'fa-check' : 'fa-ban'}"></i>
                             </button>
-                            <button onclick="startEditTrip('${trip.id}')" class="p-2 rounded-lg text-xs bg-gray-800 hover:bg-gray-700 text-blue-400 border border-gray-700" title="تعديل">
+                            <button onclick="startEditTrip('${trip.id}')" class="p-1.5 rounded-lg text-xs bg-gray-800 hover:bg-gray-700 text-blue-400 border border-gray-700" title="تعديل">
                                 <i class="fas fa-edit"></i>
                             </button>
-                            <button onclick="showInlineDelete('${trip.id}', true)" class="p-2 rounded-lg text-xs bg-gray-800 hover:bg-gray-700 text-red-400 border border-gray-700" title="حذف">
+                            <button onclick="showInlineDelete('${trip.id}', true)" class="p-1.5 rounded-lg text-xs bg-gray-800 hover:bg-gray-700 text-red-400 border border-gray-700" title="حذف">
                                 <i class="fas fa-trash-alt"></i>
                             </button>
                         </div>
-                        <!-- منطقة تأكيد الحذف الداخلي المضمن (بدون Popup) -->
-                        <div id="actions-delete-${trip.id}" class="hidden flex items-center gap-2 justify-end bg-red-950/60 p-1.5 rounded-lg border border-red-500/40">
-                            <span class="text-[11px] text-red-200">تأكيد الحذف؟</span>
-                            <button onclick="deleteTripDirect('${trip.id}')" class="px-2 py-0.5 bg-red-600 hover:bg-red-700 text-white rounded text-[11px] font-bold">نعم</button>
-                            <button onclick="showInlineDelete('${trip.id}', false)" class="px-2 py-0.5 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded text-[11px]">إلغاء</button>
+                        <div id="actions-delete-${trip.id}" class="hidden flex items-center gap-1.5 justify-end bg-red-950/60 p-1.5 rounded-lg border border-red-500/40">
+                            <span class="text-[10px] text-red-200">حذف نهائي؟</span>
+                            <button onclick="deleteTripDirect('${trip.id}')" class="px-2 py-0.5 bg-red-600 hover:bg-red-700 text-white rounded text-[10px] font-bold">نعم</button>
+                            <button onclick="showInlineDelete('${trip.id}', false)" class="px-2 py-0.5 bg-gray-800 text-gray-300 rounded text-[10px]">تراجع</button>
                         </div>
                     </td>
                 </tr>`;
@@ -244,7 +266,20 @@
             }
         };
 
-        // Edit Trip in tab form directly
+        // فتح وإغلاق نموذج الإضافة في نفس الصفحة
+        window.openAddTripForm = function() {
+            isEditing = false;
+            editTripId = null;
+            oldImages = [];
+            document.getElementById('tripForm').reset();
+            document.getElementById('trip-form-heading').textContent = "إضافة رحلة جديدة";
+            document.getElementById('trip-form-submit').textContent = "نشر الرحلة الآن";
+            
+            const container = document.getElementById('trip-form-accordion');
+            container.classList.remove('hidden');
+            container.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        };
+
         window.startEditTrip = function(id) {
             const trip = tripsData.find(t => t.id === id);
             if (!trip) return;
@@ -263,27 +298,25 @@
 
             document.getElementById('trip-form-heading').textContent = "تعديل بيانات الرحلة";
             document.getElementById('trip-form-submit').textContent = "حفظ التعديلات";
-            document.getElementById('trip-form-cancel').classList.remove('hidden');
-
-            switchTab('add-trip');
+            
+            const container = document.getElementById('trip-form-accordion');
+            container.classList.remove('hidden');
+            container.scrollIntoView({ behavior: 'smooth', block: 'start' });
         };
 
-        window.cancelTripEdit = function() {
+        window.closeTripForm = function() {
+            document.getElementById('trip-form-accordion').classList.add('hidden');
+            document.getElementById('tripForm').reset();
             isEditing = false;
             editTripId = null;
             oldImages = [];
-            document.getElementById('tripForm').reset();
-            document.getElementById('trip-form-heading').textContent = "إضافة رحلة جديدة";
-            document.getElementById('trip-form-submit').textContent = "نشر الرحلة الآن";
-            document.getElementById('trip-form-cancel').classList.add('hidden');
-            switchTab('trips');
         };
 
         window.handleTripFormSubmit = async function(e) {
             e.preventDefault();
             const btn = document.getElementById('trip-form-submit');
             const orig = btn.innerHTML;
-            btn.innerHTML = '<i class="fas fa-spinner fa-spin ml-2"></i> جاري المعالجة والرفع...';
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin ml-1"></i> جاري الرفع والنشر...';
             btn.disabled = true;
 
             const title = document.getElementById('form-trip-title').value;
@@ -331,7 +364,7 @@
                     showToast("تمت إضافة ونشر الرحلة بنجاح");
                 }
 
-                cancelTripEdit();
+                closeTripForm();
             } catch (err) {
                 showToast("حدث خطأ أثناء الحفظ", "error");
             } finally {
@@ -339,7 +372,7 @@
             }
         };
 
-        // Banner Gallery Section
+        // معرض الوسائط مع تأكيد الحذف لمنع الحذف باللمس
         function renderBannerGrid() {
             const container = document.getElementById('banner-grid');
             if (!bannerData.length) {
@@ -352,17 +385,34 @@
                 const isVid = isVideo(item.url);
 
                 return `
-                <div class="relative group rounded-xl overflow-hidden border border-gray-800 bg-gray-900 aspect-video">
+                <div class="relative rounded-xl overflow-hidden border border-gray-800 bg-gray-900 aspect-video group">
                     <img src="${thumb}" class="w-full h-full object-cover">
-                    ${isVid ? '<span class="absolute top-2 left-2 bg-black/80 text-teal-400 px-1.5 py-0.5 rounded text-[10px]"><i class="fas fa-video ml-1"></i>فيديو</span>' : ''}
-                    <div class="absolute inset-0 bg-black/70 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center p-2">
-                        <button onclick="deleteBannerDirect('${item.id}')" class="px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white rounded-lg text-xs font-bold shadow flex items-center gap-1.5">
-                            <i class="fas fa-trash-alt"></i> حذف الوسيط
-                        </button>
+                    ${isVid ? '<span class="absolute top-1.5 left-1.5 bg-black/80 text-teal-400 px-1.5 py-0.5 rounded text-[9px]"><i class="fas fa-video ml-1"></i>فيديو</span>' : ''}
+                    
+                    <!-- زر الحذف الثابت -->
+                    <button type="button" onclick="showBannerDeleteConfirm('${item.id}', true)" class="absolute top-1.5 right-1.5 w-7 h-7 bg-red-600/90 text-white rounded-full flex items-center justify-center text-xs shadow hover:scale-105 active:scale-95 transition">
+                        <i class="fas fa-trash-alt"></i>
+                    </button>
+
+                    <!-- شريط التأكيد عند الضغط على الحذف -->
+                    <div id="banner-confirm-${item.id}" class="hidden absolute inset-0 bg-black/90 p-2 flex flex-col items-center justify-center gap-2 text-center transition">
+                        <span class="text-[11px] text-red-200 font-bold">تأكيد حذف الوسيط؟</span>
+                        <div class="flex gap-2">
+                            <button onclick="deleteBannerDirect('${item.id}')" class="px-2.5 py-1 bg-red-600 text-white rounded text-[10px] font-bold">نعم</button>
+                            <button onclick="showBannerDeleteConfirm('${item.id}', false)" class="px-2.5 py-1 bg-gray-700 text-gray-200 rounded text-[10px]">تراجع</button>
+                        </div>
                     </div>
                 </div>`;
             }).join('');
         }
+
+        window.showBannerDeleteConfirm = function(id, show) {
+            const box = document.getElementById(`banner-confirm-${id}`);
+            if (box) {
+                if (show) box.classList.remove('hidden');
+                else box.classList.add('hidden');
+            }
+        };
 
         window.deleteBannerDirect = async function(id) {
             try {
@@ -378,7 +428,7 @@
             const files = document.getElementById('banner-upload-files').files;
             if (!files.length) return;
             const btn = document.getElementById('banner-upload-btn');
-            btn.innerHTML = '<i class="fas fa-spinner fa-spin ml-2"></i> جاري الرفع...';
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin ml-1"></i> جاري الرفع مباشرة...';
             btn.disabled = true;
 
             try {
@@ -398,8 +448,8 @@
         window.previewBannerSelection = function(e) {
             const preview = document.getElementById('banner-upload-preview');
             preview.innerHTML = [...e.target.files].map(f => `
-                <div class="w-16 h-16 rounded border border-gray-700 overflow-hidden bg-gray-900 flex items-center justify-center text-xs text-gray-400">
-                    ${f.type.startsWith('video') ? '<i class="fas fa-video text-teal-400 text-lg"></i>' : `<img src="${URL.createObjectURL(f)}" class="w-full h-full object-cover">`}
+                <div class="w-14 h-14 rounded border border-gray-700 overflow-hidden bg-gray-900 flex items-center justify-center text-xs text-gray-400">
+                    ${f.type.startsWith('video') ? '<i class="fas fa-video text-teal-400"></i>' : `<img src="${URL.createObjectURL(f)}" class="w-full h-full object-cover">`}
                 </div>
             `).join('');
         };
@@ -407,13 +457,14 @@
 </head>
 <body class="min-h-screen text-gray-100 flex flex-col">
 
-    <!-- Toast Notification (Internal) -->
-    <div id="admin-toast" class="fixed bottom-5 left-5 z-50 flex items-center gap-3 px-4 py-3 rounded-xl shadow-2xl border text-sm transition-all duration-300 transform translate-y-10 opacity-0 pointer-events-none">
+    <!-- Toast Notification (Fixed Auto-Dismiss) -->
+    <div id="admin-toast" class="hidden fixed bottom-5 left-1/2 -translate-x-1/2 md:left-5 md:translate-x-0 z-50 flex items-center gap-3 px-4 py-3 rounded-xl shadow-2xl border text-xs font-bold transition-all duration-300 opacity-0 translate-y-4">
         <i id="toast-icon" class="fas fa-check-circle"></i>
-        <span id="toast-text">رسالة إشعار</span>
+        <span id="toast-text"></span>
+        <button onclick="hideToastNow()" class="mr-2 text-gray-400 hover:text-white"><i class="fas fa-times"></i></button>
     </div>
 
-    <!-- 1. شاشة تسجيل الدخول -->
+    <!-- تسجيل الدخول -->
     <div id="view-login" class="flex-grow flex items-center justify-center p-4">
         <div class="bg-gray-900 border border-gray-800 p-8 rounded-2xl shadow-2xl w-full max-w-sm">
             <div class="text-center mb-6">
@@ -440,7 +491,7 @@
         </div>
     </div>
 
-    <!-- 2. واجهة لوحة التحكم الكاملة (بدون أي نوافذ منبثقة) -->
+    <!-- لوحة التحكم الكاملة -->
     <div id="view-app" class="hidden flex-grow flex flex-col">
         <!-- Header -->
         <header class="bg-gray-900 border-b border-gray-800 sticky top-0 z-40">
@@ -451,7 +502,7 @@
                     </div>
                     <div>
                         <h1 class="font-black text-base text-white leading-none">Wolf TraVal</h1>
-                        <span class="text-[10px] text-teal-400 font-semibold">لوحة الإدارة الداخلية</span>
+                        <span class="text-[10px] text-teal-400 font-semibold">لوحة الإدارة</span>
                     </div>
                 </div>
                 <div class="flex items-center gap-2">
@@ -465,157 +516,135 @@
             </div>
         </header>
 
-        <!-- Subnav / Tab Switchers -->
-        <div class="bg-gray-900/70 border-b border-gray-800 sticky top-16 z-30">
-            <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex items-center gap-2 py-2 overflow-x-auto">
-                <button id="tab-btn-overview" onclick="switchTab('overview')" class="tab-btn active px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-2 text-gray-300 hover:text-white">
-                    <i class="fas fa-chart-pie"></i> الإحصائيات
+        <!-- أزرار التبويبات المتساوية والمختصرة -->
+        <div class="bg-gray-900/80 border-b border-gray-800 sticky top-16 z-30">
+            <div class="max-w-md mx-auto px-4 flex items-center justify-center gap-2 py-2.5">
+                <button id="tab-btn-overview" onclick="switchTab('overview')" class="tab-btn active flex-1 text-center py-2 px-3 rounded-xl text-xs font-bold transition text-gray-300 hover:text-white">
+                    <i class="fas fa-chart-pie ml-1"></i> الإحصائيات
                 </button>
-                <button id="tab-btn-trips" onclick="switchTab('trips')" class="tab-btn px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-2 text-gray-300 hover:text-white">
-                    <i class="fas fa-suitcase-rolling"></i> إدارة الرحلات
+                <button id="tab-btn-trips" onclick="switchTab('trips')" class="tab-btn flex-1 text-center py-2 px-3 rounded-xl text-xs font-bold transition text-gray-300 hover:text-white">
+                    <i class="fas fa-suitcase-rolling ml-1"></i> الرحلات
                 </button>
-                <button id="tab-btn-add-trip" onclick="switchTab('add-trip')" class="tab-btn px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-2 text-gray-300 hover:text-white">
-                    <i class="fas fa-plus-circle"></i> إضافة رحلة جديدة
-                </button>
-                <button id="tab-btn-gallery" onclick="switchTab('gallery')" class="tab-btn px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-2 text-gray-300 hover:text-white">
-                    <i class="fas fa-images"></i> معرض الوسائط
+                <button id="tab-btn-gallery" onclick="switchTab('gallery')" class="tab-btn flex-1 text-center py-2 px-3 rounded-xl text-xs font-bold transition text-gray-300 hover:text-white">
+                    <i class="fas fa-images ml-1"></i> المعرض
                 </button>
             </div>
         </div>
 
-        <!-- Main Workspace -->
         <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 flex-grow w-full">
 
-            <!-- تبويب 1: الإحصائيات -->
-            <div id="tab-content-overview" class="tab-content space-y-6">
-                <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-                    <div class="bg-gray-900 border border-gray-800 p-5 rounded-2xl flex items-center justify-between">
-                        <div>
-                            <span class="text-xs text-gray-400 font-semibold block">إجمالي الرحلات</span>
-                            <span id="stat-total-trips" class="text-3xl font-black text-white mt-1 block">0</span>
+            <!-- تبويب 1: الإحصائيات (مع الزوار والحجوزات وحذف السريعة) -->
+            <div id="tab-content-overview" class="tab-content space-y-4">
+                <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+                    <!-- عدد الزوار -->
+                    <div class="bg-gray-900 border border-gray-800 p-4 rounded-2xl flex flex-col justify-between">
+                        <div class="flex items-center justify-between text-indigo-400 mb-2">
+                            <span class="text-xs text-gray-400 font-semibold">إجمالي الزوار</span>
+                            <i class="fas fa-users text-lg"></i>
                         </div>
-                        <div class="w-12 h-12 rounded-xl bg-teal-500/10 text-teal-400 flex items-center justify-center text-xl">
-                            <i class="fas fa-plane-departure"></i>
-                        </div>
+                        <span id="stat-visitors-count" class="text-2xl font-black text-white">0</span>
                     </div>
-                    <div class="bg-gray-900 border border-gray-800 p-5 rounded-2xl flex items-center justify-between">
-                        <div>
-                            <span class="text-xs text-gray-400 font-semibold block">الرحلات النشطة حالياً</span>
-                            <span id="stat-active-trips" class="text-3xl font-black text-emerald-400 mt-1 block">0</span>
+
+                    <!-- حجوزات الواتس -->
+                    <div class="bg-gray-900 border border-gray-800 p-4 rounded-2xl flex flex-col justify-between">
+                        <div class="flex items-center justify-between text-green-400 mb-2">
+                            <span class="text-xs text-gray-400 font-semibold">حجوزات واتساب</span>
+                            <i class="fab fa-whatsapp text-lg"></i>
                         </div>
-                        <div class="w-12 h-12 rounded-xl bg-emerald-500/10 text-emerald-400 flex items-center justify-center text-xl">
-                            <i class="fas fa-check-circle"></i>
-                        </div>
+                        <span id="stat-bookings-count" class="text-2xl font-black text-green-400">0</span>
                     </div>
-                    <div class="bg-gray-900 border border-gray-800 p-5 rounded-2xl flex items-center justify-between">
-                        <div>
-                            <span class="text-xs text-gray-400 font-semibold block">وسائط المعرض والبانر</span>
-                            <span id="stat-gallery-count" class="text-3xl font-black text-blue-400 mt-1 block">0</span>
+
+                    <!-- إجمالي الرحلات -->
+                    <div class="bg-gray-900 border border-gray-800 p-4 rounded-2xl flex flex-col justify-between">
+                        <div class="flex items-center justify-between text-teal-400 mb-2">
+                            <span class="text-xs text-gray-400 font-semibold">إجمالي الرحلات</span>
+                            <i class="fas fa-plane-departure text-lg"></i>
                         </div>
-                        <div class="w-12 h-12 rounded-xl bg-blue-500/10 text-blue-400 flex items-center justify-center text-xl">
-                            <i class="fas fa-photo-video"></i>
+                        <span id="stat-total-trips" class="text-2xl font-black text-white">0</span>
+                    </div>
+
+                    <!-- وسائط المعرض -->
+                    <div class="bg-gray-900 border border-gray-800 p-4 rounded-2xl flex flex-col justify-between">
+                        <div class="flex items-center justify-between text-blue-400 mb-2">
+                            <span class="text-xs text-gray-400 font-semibold">وسائط المعرض</span>
+                            <i class="fas fa-photo-video text-lg"></i>
                         </div>
+                        <span id="stat-gallery-count" class="text-2xl font-black text-blue-400">0</span>
                     </div>
                 </div>
 
-                <div class="bg-gray-900 border border-gray-800 p-6 rounded-2xl">
-                    <h3 class="font-bold text-white text-base mb-2">إجراءات سريعة</h3>
-                    <p class="text-xs text-gray-400 mb-4">يمكنك التنقل مباشرة لأي قسم عبر الروابط التالية دون الحاجة لفتح صفحات جديدة.</p>
-                    <div class="flex flex-wrap gap-3">
-                        <button onclick="switchTab('add-trip')" class="px-4 py-2.5 bg-teal-600 hover:bg-teal-700 text-white rounded-xl text-xs font-bold flex items-center gap-2 transition">
-                            <i class="fas fa-plus"></i> إنشاء رحلة جديدة
-                        </button>
-                        <button onclick="switchTab('trips')" class="px-4 py-2.5 bg-gray-800 hover:bg-gray-700 text-gray-200 rounded-xl text-xs font-bold flex items-center gap-2 transition">
-                            <i class="fas fa-list"></i> استعراض وتعديل الرحلات
-                        </button>
-                        <button onclick="switchTab('gallery')" class="px-4 py-2.5 bg-gray-800 hover:bg-gray-700 text-gray-200 rounded-xl text-xs font-bold flex items-center gap-2 transition">
-                            <i class="fas fa-upload"></i> رفع وسائط للبانر
-                        </button>
+                <div class="bg-gray-900 border border-gray-800 p-5 rounded-2xl flex items-center justify-between">
+                    <div>
+                        <span class="text-xs text-gray-400 font-semibold block">الرحلات النشطة المعروضة الآن</span>
+                        <span id="stat-active-trips" class="text-2xl font-black text-teal-400 mt-1 block">0</span>
                     </div>
+                    <button onclick="switchTab('trips')" class="px-4 py-2 bg-teal-600/20 text-teal-400 border border-teal-500/30 rounded-xl text-xs font-bold hover:bg-teal-600/30 transition">
+                        عرض الرحلات <i class="fas fa-arrow-left mr-1"></i>
+                    </button>
                 </div>
             </div>
 
-            <!-- تبويب 2: إدارة الرحلات (جدول داخلي كامل) -->
+            <!-- تبويب 2: إدارة الرحلات (النموذج ينفتح ويغلق في نفس الصفحة) -->
             <div id="tab-content-trips" class="tab-content hidden space-y-4">
-                <div class="flex justify-between items-center">
+                
+                <!-- رأس القسم وزر إضافة رحلة -->
+                <div class="flex justify-between items-center bg-gray-900 border border-gray-800 p-4 rounded-2xl">
                     <div>
-                        <h2 class="text-lg font-bold text-white">قائمة الرحلات</h2>
+                        <h2 class="text-base font-bold text-white">إدارة وجدول الرحلات</h2>
                         <p class="text-xs text-gray-400">تعديل أو تنشيط أو حذف الرحلات الحالية</p>
                     </div>
-                    <button onclick="switchTab('add-trip')" class="px-3.5 py-2 bg-teal-600 hover:bg-teal-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 transition">
+                    <button onclick="openAddTripForm()" class="px-4 py-2 bg-teal-600 hover:bg-teal-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 transition shadow">
                         <i class="fas fa-plus"></i> إضافة رحلة
                     </button>
                 </div>
 
-                <div class="bg-gray-900 border border-gray-800 rounded-2xl overflow-hidden shadow-xl">
-                    <div class="overflow-x-auto">
-                        <table class="w-full text-right border-collapse">
-                            <thead>
-                                <tr class="bg-gray-800/60 text-gray-400 text-xs border-b border-gray-800">
-                                    <th class="py-3 px-4 font-bold">الرحلة</th>
-                                    <th class="py-3 px-4 font-bold">السعر</th>
-                                    <th class="py-3 px-4 font-bold">الحالة</th>
-                                    <th class="py-3 px-4 font-bold">تاريخ الذهاب</th>
-                                    <th class="py-3 px-4 font-bold text-left">إجراءات</th>
-                                </tr>
-                            </thead>
-                            <tbody id="trips-table-body" class="divide-y divide-gray-800/60"></tbody>
-                        </table>
-                    </div>
-                </div>
-            </div>
-
-            <!-- تبويب 3: نموذج إضافة / تعديل رحلة (مدمج داخلياً بدون Popup) -->
-            <div id="tab-content-add-trip" class="tab-content hidden">
-                <div class="bg-gray-900 border border-gray-800 rounded-2xl p-6 max-w-3xl mx-auto shadow-xl">
-                    <div class="flex justify-between items-center mb-6 border-b border-gray-800 pb-4">
-                        <div>
-                            <h2 id="trip-form-heading" class="text-lg font-bold text-white">إضافة رحلة جديدة</h2>
-                            <p class="text-xs text-gray-400 mt-0.5">املأ البيانات أدناه وسيتم نشر الرحلة تلقائياً في الصفحة الرئيسية</p>
-                        </div>
-                        <button id="trip-form-cancel" type="button" onclick="cancelTripEdit()" class="hidden px-3 py-1.5 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-xl text-xs font-semibold">
-                            إلغاء التعديل
+                <!-- نموذج الإضافة / التعديل المدمج في نفس الصفحة -->
+                <div id="trip-form-accordion" class="hidden bg-gray-900 border border-teal-500/40 rounded-2xl p-5 shadow-2xl transition-all">
+                    <div class="flex justify-between items-center mb-4 border-b border-gray-800 pb-3">
+                        <h3 id="trip-form-heading" class="text-sm font-bold text-teal-400">إضافة رحلة جديدة</h3>
+                        <button type="button" onclick="closeTripForm()" class="text-gray-400 hover:text-white text-xs px-2 py-1 bg-gray-800 rounded-lg">
+                            <i class="fas fa-times ml-1"></i> إغلاق النموذج
                         </button>
                     </div>
 
-                    <form id="tripForm" onsubmit="handleTripFormSubmit(event)" class="space-y-4">
-                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <form id="tripForm" onsubmit="handleTripFormSubmit(event)" class="space-y-3">
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
                             <div>
                                 <label class="block text-xs text-gray-400 mb-1">عنوان الرحلة</label>
-                                <input type="text" id="form-trip-title" required class="w-full bg-gray-800 border border-gray-700 rounded-xl px-3.5 py-2.5 text-white text-sm focus:outline-none focus:border-teal-500" placeholder="مثال: رحلة دهب وشرم الشيخ">
+                                <input type="text" id="form-trip-title" required class="w-full bg-gray-800 border border-gray-700 rounded-xl px-3 py-2 text-white text-xs focus:outline-none focus:border-teal-500">
                             </div>
                             <div>
                                 <label class="block text-xs text-gray-400 mb-1">المكان / الوجهة</label>
-                                <input type="text" id="form-trip-location" required class="w-full bg-gray-800 border border-gray-700 rounded-xl px-3.5 py-2.5 text-white text-sm focus:outline-none focus:border-teal-500" placeholder="مثال: دهب - جنوب سيناء">
+                                <input type="text" id="form-trip-location" required class="w-full bg-gray-800 border border-gray-700 rounded-xl px-3 py-2 text-white text-xs focus:outline-none focus:border-teal-500">
                             </div>
                         </div>
 
-                        <div class="grid grid-cols-2 gap-4">
+                        <div class="grid grid-cols-2 gap-3">
                             <div>
-                                <label class="block text-xs text-gray-400 mb-1">سعر الفرد (ج.م)</label>
-                                <input type="number" id="form-trip-price" required class="w-full bg-gray-800 border border-gray-700 rounded-xl px-3.5 py-2.5 text-white text-sm focus:outline-none focus:border-teal-500">
+                                <label class="block text-xs text-gray-400 mb-1">السعر (ج.م)</label>
+                                <input type="number" id="form-trip-price" required class="w-full bg-gray-800 border border-gray-700 rounded-xl px-3 py-2 text-white text-xs focus:outline-none focus:border-teal-500">
                             </div>
                             <div>
-                                <label class="block text-xs text-teal-400 mb-1">رقم الحجز (واتساب)</label>
-                                <input type="text" id="form-trip-phone" required class="w-full bg-gray-800 border border-teal-500/40 rounded-xl px-3.5 py-2.5 text-white text-sm focus:outline-none focus:border-teal-500 ltr" placeholder="201xxxxxxxxx">
-                            </div>
-                        </div>
-
-                        <div class="grid grid-cols-2 gap-4">
-                            <div>
-                                <label class="block text-xs text-gray-400 mb-1">تاريخ وموعد الذهاب</label>
-                                <input type="datetime-local" id="form-trip-date" required class="w-full bg-gray-800 border border-gray-700 rounded-xl px-3.5 py-2.5 text-white text-sm focus:outline-none focus:border-teal-500 ltr">
-                            </div>
-                            <div>
-                                <label class="block text-xs text-gray-400 mb-1">المقاعد المتاحة</label>
-                                <input type="number" id="form-trip-seats" required class="w-full bg-gray-800 border border-gray-700 rounded-xl px-3.5 py-2.5 text-white text-sm focus:outline-none focus:border-teal-500">
+                                <label class="block text-xs text-teal-400 mb-1">هاتف الواتساب</label>
+                                <input type="text" id="form-trip-phone" required class="w-full bg-gray-800 border border-teal-500/40 rounded-xl px-3 py-2 text-white text-xs focus:outline-none focus:border-teal-500 ltr">
                             </div>
                         </div>
 
-                        <div class="grid grid-cols-2 gap-4">
+                        <div class="grid grid-cols-2 gap-3">
                             <div>
-                                <label class="block text-xs text-gray-400 mb-1">عدد الأيام</label>
-                                <select id="form-trip-days" class="w-full bg-gray-800 border border-gray-700 rounded-xl px-3.5 py-2.5 text-white text-sm focus:outline-none focus:border-teal-500">
+                                <label class="block text-xs text-gray-400 mb-1">موعد الذهاب</label>
+                                <input type="datetime-local" id="form-trip-date" required class="w-full bg-gray-800 border border-gray-700 rounded-xl px-3 py-2 text-white text-xs focus:outline-none focus:border-teal-500 ltr">
+                            </div>
+                            <div>
+                                <label class="block text-xs text-gray-400 mb-1">المقاعد</label>
+                                <input type="number" id="form-trip-seats" required class="w-full bg-gray-800 border border-gray-700 rounded-xl px-3 py-2 text-white text-xs focus:outline-none focus:border-teal-500">
+                            </div>
+                        </div>
+
+                        <div class="grid grid-cols-2 gap-3">
+                            <div>
+                                <label class="block text-xs text-gray-400 mb-1">الأيام</label>
+                                <select id="form-trip-days" class="w-full bg-gray-800 border border-gray-700 rounded-xl px-3 py-2 text-white text-xs">
                                     <option value="1">1 يوم</option>
                                     <option value="2">2 يوم</option>
                                     <option value="3">3 أيام</option>
@@ -624,8 +653,8 @@
                                 </select>
                             </div>
                             <div>
-                                <label class="block text-xs text-gray-400 mb-1">عدد الليالي</label>
-                                <select id="form-trip-nights" class="w-full bg-gray-800 border border-gray-700 rounded-xl px-3.5 py-2.5 text-white text-sm focus:outline-none focus:border-teal-500">
+                                <label class="block text-xs text-gray-400 mb-1">الليالي</label>
+                                <select id="form-trip-nights" class="w-full bg-gray-800 border border-gray-700 rounded-xl px-3 py-2 text-white text-xs">
                                     <option value="0">بدون مبيت</option>
                                     <option value="1">1 ليلة</option>
                                     <option value="2">2 ليلة</option>
@@ -636,45 +665,64 @@
                         </div>
 
                         <div>
-                            <label class="block text-xs text-gray-400 mb-1">وصف وبرنامج الرحلة</label>
-                            <textarea id="form-trip-desc" rows="4" required class="w-full bg-gray-800 border border-gray-700 rounded-xl px-3.5 py-2.5 text-white text-sm focus:outline-none focus:border-teal-500" placeholder="اكتب تفاصيل الإقامة، الانتقالات، والأنشطة..."></textarea>
+                            <label class="block text-xs text-gray-400 mb-1">تفاصيل وبرنامج الرحلة</label>
+                            <textarea id="form-trip-desc" rows="3" required class="w-full bg-gray-800 border border-gray-700 rounded-xl px-3 py-2 text-white text-xs focus:outline-none focus:border-teal-500"></textarea>
                         </div>
 
-                        <div class="bg-gray-800/70 p-4 rounded-xl border border-gray-700">
-                            <label class="block text-xs font-bold text-gray-300 mb-1.5">رفع صور / فيديو للرحلة</label>
-                            <input type="file" id="form-trip-files" multiple accept="image/*,video/*" class="w-full text-xs text-gray-400 file:bg-teal-600 file:text-white file:border-0 file:rounded-lg file:px-3 file:py-1.5">
+                        <div class="bg-gray-800/80 p-3 rounded-xl border border-gray-700">
+                            <label class="block text-xs font-bold text-gray-300 mb-1">رفع صور / فيديو (سريع ومباشر)</label>
+                            <input type="file" id="form-trip-files" multiple accept="image/*,video/*" class="w-full text-xs text-gray-400 file:bg-teal-600 file:text-white file:border-0 file:rounded-lg file:px-2.5 file:py-1">
                         </div>
 
-                        <div class="pt-2">
-                            <button type="submit" id="trip-form-submit" class="w-full bg-teal-600 hover:bg-teal-700 text-white font-bold py-3.5 rounded-xl text-sm transition shadow-lg">
+                        <div class="flex gap-2 pt-1">
+                            <button type="submit" id="trip-form-submit" class="flex-grow bg-teal-600 hover:bg-teal-700 text-white font-bold py-2.5 rounded-xl text-xs transition shadow">
                                 نشر الرحلة الآن
+                            </button>
+                            <button type="button" onclick="closeTripForm()" class="px-4 py-2.5 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-xl text-xs font-semibold">
+                                إلغاء
                             </button>
                         </div>
                     </form>
                 </div>
+
+                <!-- جدول الرحلات -->
+                <div class="bg-gray-900 border border-gray-800 rounded-2xl overflow-hidden shadow-xl">
+                    <div class="overflow-x-auto">
+                        <table class="w-full text-right border-collapse">
+                            <thead>
+                                <tr class="bg-gray-800/60 text-gray-400 text-xs border-b border-gray-800">
+                                    <th class="py-3 px-4 font-bold">الرحلة</th>
+                                    <th class="py-3 px-4 font-bold">السعر</th>
+                                    <th class="py-3 px-4 font-bold">الحالة</th>
+                                    <th class="py-3 px-4 font-bold">التاريخ</th>
+                                    <th class="py-3 px-4 font-bold text-left">إجراءات</th>
+                                </tr>
+                            </thead>
+                            <tbody id="trips-table-body" class="divide-y divide-gray-800/60"></tbody>
+                        </table>
+                    </div>
+                </div>
             </div>
 
-            <!-- تبويب 4: معرض الوسائط والبانر (رفع واستعراض مدمج) -->
-            <div id="tab-content-gallery" class="tab-content hidden space-y-6">
-                <!-- أداة الرفع المباشرة -->
-                <div class="bg-gray-900 border border-gray-800 p-6 rounded-2xl shadow-xl">
-                    <h2 class="text-base font-bold text-white mb-1">رفع وسائط جديدة للبانر والمعرض</h2>
-                    <p class="text-xs text-gray-400 mb-4">الصور تظهر في شريط البانر العلوي، ومقاطع الفيديو تظهر في حاوية الفيديو الترويجية</p>
+            <!-- تبويب 3: معرض الوسائط (رفع مباشر بدون بطء + تأكيد حذف لمنع الخطأ باللمس) -->
+            <div id="tab-content-gallery" class="tab-content hidden space-y-4">
+                <div class="bg-gray-900 border border-gray-800 p-5 rounded-2xl shadow-xl">
+                    <h2 class="text-sm font-bold text-white mb-1">رفع وسائط للمعرض</h2>
+                    <p class="text-xs text-gray-400 mb-3">الرفع يتم مباشرة إلى السيرفر بأقصى سرعة</p>
                     
-                    <form id="bannerUploadForm" onsubmit="handleBannerUpload(event)" class="space-y-4">
-                        <div class="bg-gray-800/60 p-4 rounded-xl border border-gray-700">
-                            <input type="file" id="banner-upload-files" multiple accept="image/*,video/*" onchange="previewBannerSelection(event)" required class="w-full text-xs text-gray-400 file:bg-blue-600 file:text-white file:border-0 file:rounded-lg file:px-3 file:py-1.5">
+                    <form id="bannerUploadForm" onsubmit="handleBannerUpload(event)" class="space-y-3">
+                        <div class="bg-gray-800/70 p-3 rounded-xl border border-gray-700">
+                            <input type="file" id="banner-upload-files" multiple accept="image/*,video/*" onchange="previewBannerSelection(event)" required class="w-full text-xs text-gray-400 file:bg-blue-600 file:text-white file:border-0 file:rounded-lg file:px-2.5 file:py-1">
                         </div>
                         <div id="banner-upload-preview" class="flex flex-wrap gap-2"></div>
-                        <button type="submit" id="banner-upload-btn" class="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-xl transition shadow">
+                        <button type="submit" id="banner-upload-btn" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-xl transition shadow">
                             <i class="fas fa-cloud-upload-alt ml-1"></i> بدء الرفع إلى المعرض
                         </button>
                     </form>
                 </div>
 
-                <!-- استعراض الوسائط الحالية -->
-                <div class="bg-gray-900 border border-gray-800 p-6 rounded-2xl shadow-xl">
-                    <h3 class="text-base font-bold text-white mb-4">الوسائط المنشورة حالياً</h3>
+                <div class="bg-gray-900 border border-gray-800 p-5 rounded-2xl shadow-xl">
+                    <h3 class="text-sm font-bold text-white mb-3">الوسائط المنشورة حالياً</h3>
                     <div id="banner-grid" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3"></div>
                 </div>
             </div>
