@@ -29,28 +29,25 @@
         body { font-family: 'Cairo', sans-serif; background-color: #0b1120; overflow-x: hidden; }
         body.modal-open { overflow: hidden !important; }
 
-        /* توحيد الخلفيات لتتناسق بأناقة مع الهيدر العلوي */
         .glass-theme { 
             background: rgba(0, 0, 0, 0.7); 
             backdrop-filter: blur(12px); 
             -webkit-backdrop-filter: blur(12px);
-            border-color: rgba(255, 255, 255, 0.05);
+            border-color: rgba(255, 255, 255, 0.08);
         }
 
         .glass-nav { 
             height: 60px; 
-            border-bottom: 1px solid rgba(255, 255, 255, 0.05); 
             z-index: 50; 
         }
 
-        /* شاشة التحميل مع استرجاع الإنارة المتوهجة */
         #loader { 
             position: fixed; inset: 0; z-index: 9999; 
             background-color: #0b1120; 
             display: flex; flex-direction: column; align-items: center; justify-content: center; 
-            transition: opacity 0.3s ease-in-out, visibility 0.3s; 
+            transition: opacity 0.35s ease-in-out, visibility 0.35s; 
         }
-        .loader-hidden { opacity: 0; visibility: hidden; }
+        .loader-hidden { opacity: 0; visibility: hidden; pointer-events: none; }
         .loader-glow-ring {
             box-shadow: 0 0 25px rgba(20, 184, 166, 0.6), inset 0 0 15px rgba(20, 184, 166, 0.4);
         }
@@ -87,19 +84,22 @@
 
         .description-content { 
             white-space: pre-wrap; 
-            margin-bottom: 0.5rem; 
+            margin-bottom: 0.25rem; 
             overflow: hidden;
             transition: max-height 0.2s ease-out;
-            max-height: 4.5em; 
+            max-height: 3em; 
             position: relative;
         }
         .description-content.expanded { max-height: 500px; }
-        .read-more-btn { color: #2dd4bf; font-size: 0.75rem; font-weight: bold; cursor: pointer; display: inline-block; margin-bottom: 0.75rem; }
+        .read-more-btn { color: #2dd4bf; font-size: 0.65rem; font-weight: bold; cursor: pointer; display: inline-block; margin-bottom: 0.5rem; }
+        @media (min-width: 640px) {
+            .description-content { max-height: 4.5em; margin-bottom: 0.5rem; }
+            .read-more-btn { font-size: 0.75rem; margin-bottom: 0.75rem; }
+        }
         .read-more-btn:hover { text-decoration: underline; }
 
         .card-bottom-section { margin-top: auto; }
         
-        /* زر تثبيت التطبيق المصغر */
         .install-btn { 
             position: fixed; bottom: 20px; left: 20px; z-index: 1000; 
             background: linear-gradient(135deg, #0d9488, #2563eb); 
@@ -151,9 +151,13 @@
         let pendingNotifications = [], unreadNotificationsCount = 0;
         let remindersChecked = false; 
 
+        // التحكم في عرض الرحلات تدريجياً (6 في المرة)
+        const TRIPS_PER_PAGE = 6;
+        let visibleTripsCount = TRIPS_PER_PAGE;
+
         function optimizeUrl(url) {
             if (url && url.includes('cloudinary.com') && !url.includes('video')) {
-                return url.replace('/upload/', '/upload/f_auto,q_auto,w_500,dpr_auto/');
+                return url.replace('/upload/', '/upload/f_auto,q_auto,w_450,dpr_auto/');
             }
             return url;
         }
@@ -161,7 +165,7 @@
         function getVideoPoster(url) {
             if (!url) return '';
             if (url.includes('cloudinary.com')) {
-                return url.replace('/video/upload/', '/video/upload/so_0,f_auto,q_auto,w_600/').replace(/\.[^/.]+$/, ".jpg");
+                return url.replace('/video/upload/', '/video/upload/so_0,f_auto,q_auto,w_500/').replace(/\.[^/.]+$/, ".jpg");
             }
             return '';
         }
@@ -229,15 +233,12 @@
             marqueeObserver.observe(marqueeEl);
         }
 
-        // PWA Install Prompt + إخفاء تلقائي بعد 10 ثوانٍ
         let deferredPrompt;
         window.addEventListener('beforeinstallprompt', (e) => {
             e.preventDefault(); deferredPrompt = e;
             const installBtn = document.getElementById('installAppBtn');
             if (!localStorage.getItem('appInstalled') && installBtn) { 
                 installBtn.classList.remove('hidden'); 
-                
-                // اختفاء الزر بعد 10 ثوانٍ
                 setTimeout(() => {
                     installBtn.style.opacity = '0';
                     setTimeout(() => installBtn.classList.add('hidden'), 500);
@@ -270,23 +271,31 @@
             return Promise.all(promises);
         }
 
+        // إزالة شاشة التحميل بعد جاهزية الواجهة الأولى بالكامل
         function tryRemoveLoader() {
             if (isTripsReady && isBannerReady && !initialLoadComplete) {
                 const loader = document.getElementById('loader');
                 if (loader) {
-                    loader.classList.add('loader-hidden'); initialLoadComplete = true;
+                    loader.classList.add('loader-hidden'); 
+                    initialLoadComplete = true;
                     setTimeout(() => { 
                         loader.remove(); 
                         processPendingNotifications(); 
                         if (!remindersChecked) {
-                            setTimeout(checkUpcomingReminders, 3500);
+                            setTimeout(checkUpcomingReminders, 3000);
                             remindersChecked = true;
                         }
-                    }, 300);
+                    }, 350);
                 }
             }
         }
-        setTimeout(() => { isTripsReady = true; isBannerReady = true; tryRemoveLoader(); }, 4000); 
+        
+        // مؤقت أمان في حال وجود مشاكل في اتصال العميل
+        setTimeout(() => { 
+            isTripsReady = true; 
+            isBannerReady = true; 
+            tryRemoveLoader(); 
+        }, 5000); 
 
         window.showNotification = function(msg, type) {
             const container = document.getElementById('toast-container');
@@ -366,9 +375,23 @@
                     if (initialLoadComplete || attempts > 50) {
                         clearInterval(checkData); 
                         if(initialLoadComplete) {
-                            const tripElement = document.getElementById('trip-card-' + tripId);
-                            if (tripElement) { tripElement.scrollIntoView({ behavior: 'smooth', block: 'center' }); tripElement.classList.add('ring-2', 'ring-teal-500'); setTimeout(() => tripElement.classList.remove('ring-2', 'ring-teal-500'), 2000); } 
-                            else { showNotification("الرابط غير صالح أو الرحلة غير موجودة", "error"); }
+                            // التوسيع التلقائي إذا كانت الرحلة المطلوبة خارج أول 6
+                            const tripIndex = tripsData.findIndex(t => t.id === tripId);
+                            if (tripIndex !== -1 && tripIndex >= visibleTripsCount) {
+                                visibleTripsCount = Math.ceil((tripIndex + 1) / TRIPS_PER_PAGE) * TRIPS_PER_PAGE;
+                                renderTrips(tripsData);
+                            }
+
+                            setTimeout(() => {
+                                const tripElement = document.getElementById('trip-card-' + tripId);
+                                if (tripElement) { 
+                                    tripElement.scrollIntoView({ behavior: 'smooth', block: 'center' }); 
+                                    tripElement.classList.add('ring-2', 'ring-teal-500'); 
+                                    setTimeout(() => tripElement.classList.remove('ring-2', 'ring-teal-500'), 2000); 
+                                } else { 
+                                    showNotification("الرابط غير صالح أو الرحلة غير موجودة", "error"); 
+                                }
+                            }, 200);
                         }
                         window.history.replaceState({}, document.title, window.location.pathname);
                     }
@@ -392,7 +415,7 @@
                 sessionStorage.setItem('visited', 'true');
             }
 
-            // الاستماع للإحصائيات في الفوتر بالوقت الفعلي
+            // الاستماع للإحصائيات في الفوتر
             onSnapshot(statsDoc, (snap) => {
                 if (snap.exists()) {
                     const data = snap.data();
@@ -460,8 +483,8 @@
         window.toggleDesc = function(id) {
             const desc = document.getElementById(`desc-${id}`);
             const btn = document.getElementById(`btn-desc-${id}`);
-            if (desc.classList.contains('expanded')) { desc.classList.remove('expanded'); btn.textContent = 'عرض المزيد'; } 
-            else { desc.classList.add('expanded'); btn.textContent = 'عرض أقل'; }
+            if (desc.classList.contains('expanded')) { desc.classList.remove('expanded'); btn.textContent = 'المزيد..'; } 
+            else { desc.classList.add('expanded'); btn.textContent = 'أقل..'; }
         }
 
         window.switchCardView = function(tripId, viewName) {
@@ -490,7 +513,7 @@
             const count = document.getElementById(`clientCount-${tripId}`).value;
             const total = document.getElementById(`clientTotal-${tripId}`).textContent;
 
-            // زيادة عداد الحجوزات في لوحة التحكم وقاعدة البيانات
+            // زيادة عداد الحجوزات
             const statsDoc = doc(db, statsPath, 'general');
             setDoc(statsDoc, { bookings: increment(1) }, { merge: true }).catch(() => {});
 
@@ -499,16 +522,31 @@
             window.switchCardView(tripId, 'default');
         };
 
+        // دالة زيادة عدد الرحلات المعروضة
+        window.loadMoreTrips = function() {
+            visibleTripsCount += TRIPS_PER_PAGE;
+            renderTrips(tripsData);
+        };
+
         function renderTrips(trips) {
-            const container = document.getElementById('trips-container'); container.innerHTML = ''; 
+            const container = document.getElementById('trips-container'); 
+            const loadMoreWrapper = document.getElementById('load-more-container');
+            container.innerHTML = ''; 
             updateSchema(trips); 
-            if (trips.length === 0) { container.innerHTML = `<div class="col-span-full flex flex-col items-center justify-center py-16 text-center opacity-80"><div class="bg-gray-800 p-6 rounded-full mb-4 shadow-xl"><i class="fas fa-suitcase-rolling text-5xl text-teal-500"></i></div><h3 class="text-2xl font-bold text-gray-200 mb-2">لا توجد رحلات متاحة حالياً</h3></div>`; return; }
+            
+            if (trips.length === 0) { 
+                container.innerHTML = `<div class="col-span-full flex flex-col items-center justify-center py-16 text-center opacity-80"><div class="bg-gray-800 p-6 rounded-full mb-4 shadow-xl"><i class="fas fa-suitcase-rolling text-5xl text-teal-500"></i></div><h3 class="text-2xl font-bold text-gray-200 mb-2">لا توجد رحلات متاحة حالياً</h3></div>`; 
+                if (loadMoreWrapper) loadMoreWrapper.classList.add('hidden');
+                return; 
+            }
 
             const fragment = document.createDocumentFragment();
+            // اقتطاع الرحلات بناءً على visibleTripsCount
+            const tripsToRender = trips.slice(0, visibleTripsCount);
 
-            trips.forEach((trip) => {
+            tripsToRender.forEach((trip) => {
                 const card = document.createElement('div'); card.id = `trip-card-${trip.id}`; 
-                card.className = "trip-card w-11/12 md:w-full max-w-sm mx-auto bg-gray-900 border border-gray-700/80 rounded-2xl overflow-hidden shadow-lg shadow-teal-500/5";
+                card.className = "trip-card w-full bg-gray-900 border border-gray-700/80 rounded-xl md:rounded-2xl overflow-hidden shadow-lg shadow-teal-500/5";
 
                 let mediaList = Array.isArray(trip.images) ? trip.images : (trip.mainImageUrl ? [trip.mainImageUrl] : ['https://via.placeholder.com/400x300']);
                 let mediaHtml = ''; let controlsHtml = ''; let isTripVideo = mediaList.length > 0 && isVideo(mediaList[0]); 
@@ -529,7 +567,7 @@
                         }
                     }).join('');
                     if (mediaList.length > 1) { 
-                        controlsHtml = `<div class="absolute top-1/2 -translate-y-1/2 w-full flex justify-between items-center px-2 z-20 pointer-events-none"><button onclick="event.stopPropagation(); changeSlide(this, -1)" class="bg-black/60 hover:bg-black/90 text-white w-8 h-8 rounded-full flex items-center justify-center pointer-events-auto transition"><i class="fas fa-chevron-right text-xs"></i></button><button onclick="event.stopPropagation(); changeSlide(this, 1)" class="bg-black/60 hover:bg-black/90 text-white w-8 h-8 rounded-full flex items-center justify-center pointer-events-auto transition"><i class="fas fa-chevron-left text-xs"></i></button></div><div class="absolute top-4 left-4 bg-black/70 text-white text-[10px] px-2 py-0.5 rounded-full z-20 slide-counter">1/${mediaList.length}</div>`; 
+                        controlsHtml = `<div class="absolute top-1/2 -translate-y-1/2 w-full flex justify-between items-center px-1 md:px-2 z-20 pointer-events-none"><button onclick="event.stopPropagation(); changeSlide(this, -1)" class="bg-black/60 hover:bg-black/90 text-white w-6 h-6 md:w-8 md:h-8 rounded-full flex items-center justify-center pointer-events-auto transition"><i class="fas fa-chevron-right text-[10px] md:text-xs"></i></button><button onclick="event.stopPropagation(); changeSlide(this, 1)" class="bg-black/60 hover:bg-black/90 text-white w-6 h-6 md:w-8 md:h-8 rounded-full flex items-center justify-center pointer-events-auto transition"><i class="fas fa-chevron-left text-[10px] md:text-xs"></i></button></div><div class="absolute top-2 left-2 md:top-4 md:left-4 bg-black/70 text-white text-[9px] md:text-[10px] px-1.5 py-0.5 rounded-full z-20 slide-counter">1/${mediaList.length}</div>`; 
                     }
                 }
 
@@ -549,89 +587,92 @@
                     else if (diffDays === 1) { remainingTime = 'غداً'; } 
                     else { remainingTime = `باقي ${diffDays} أيام`; }
 
-                    dateDisplay = departureDateObj.toLocaleDateString('ar-EG', { day: 'numeric', month: 'short', year: 'numeric' }); 
+                    dateDisplay = departureDateObj.toLocaleDateString('ar-EG', { day: 'numeric', month: 'short' }); 
                     timeDisplay = departureDateObj.toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' });
                 } else if (trip.status === 'expired') { remainingTime = 'انتهت'; isExpired = true; }
 
-                // تم إزالة إيموجي النار ليصبح النص فقط: انتهت
-                const statusTag = isExpired ? `<div class="absolute top-4 left-4 bg-red-600 text-white text-[10px] font-bold px-2 py-1 rounded shadow-md z-30 animate-pulse">انتهت</div>` : '';
+                const statusTag = isExpired ? `<div class="absolute top-2 left-2 md:top-4 md:left-4 bg-red-600 text-white text-[8px] md:text-[10px] font-bold px-1.5 py-0.5 rounded shadow z-30 animate-pulse">انتهت</div>` : '';
                 const descText = trip.description || '';
-                const showReadMore = descText.length > 100 || (descText.match(/\n/g) || []).length > 2;
-                const readMoreBtn = showReadMore ? `<span id="btn-desc-${trip.id}" onclick="toggleDesc('${trip.id}')" class="read-more-btn">عرض المزيد</span>` : '';
+                const showReadMore = descText.length > 70;
+                const readMoreBtn = showReadMore ? `<span id="btn-desc-${trip.id}" onclick="toggleDesc('${trip.id}')" class="read-more-btn">المزيد..</span>` : '';
 
                 card.innerHTML = `
-                    <div class="trip-card-image-container relative h-60 flex-shrink-0 overflow-hidden bg-gray-800">
+                    <div class="trip-card-image-container relative h-36 sm:h-48 md:h-60 flex-shrink-0 overflow-hidden bg-gray-800">
                         ${mediaHtml} ${controlsHtml}
-                        <div class="absolute top-4 right-4 bg-teal-600 text-white text-[10px] font-bold px-2 py-1 rounded shadow-md z-20 flex items-center gap-1">${isTripVideo ? '<i class="fas fa-video ml-1"></i>' : ''} ${trip.durationText || 'غير محدد'}</div>
+                        <div class="absolute top-2 right-2 md:top-4 md:right-4 bg-teal-600 text-white text-[8px] md:text-[10px] font-bold px-1.5 py-0.5 rounded shadow z-20 flex items-center gap-1">${isTripVideo ? '<i class="fas fa-video ml-0.5"></i>' : ''} ${trip.durationText || 'غير محدد'}</div>
                         ${statusTag}
                     </div>
                     
-                    <div class="trip-card-body p-4 bg-gray-800/80 rounded-b-2xl"> 
-                        <div class="flex justify-between items-start mb-2"><h3 class="text-base font-bold text-white leading-tight">${trip.title}</h3><span class="text-teal-400 font-extrabold text-base whitespace-nowrap">${trip.price} <span class="text-xs font-normal text-gray-300">ج.م</span></span></div>
-                        <div id="desc-${trip.id}" class="description-content text-gray-300 text-xs font-medium">${descText}</div>
+                    <div class="trip-card-body p-2 sm:p-4 bg-gray-800/80 rounded-b-xl md:rounded-b-2xl"> 
+                        <div class="flex justify-between items-start mb-1.5 gap-1">
+                            <!-- عنوان الرحلة أصغر حجماً وينقسم لسطرين بسهولة -->
+                            <h3 class="text-[11px] sm:text-sm font-bold text-white leading-snug line-clamp-2 min-h-[2.4em] flex-1">${trip.title}</h3>
+                            <span class="text-teal-400 font-black text-xs sm:text-sm whitespace-nowrap mt-0.5">${trip.price} <span class="text-[9px] font-normal text-gray-300">ج.م</span></span>
+                        </div>
+                        <div id="desc-${trip.id}" class="description-content text-gray-300 text-[10px] sm:text-xs font-medium">${descText}</div>
                         ${readMoreBtn}
 
                         <!-- المرحلة 1: الواجهة الافتراضية للبطاقة -->
                         <div id="card-view-default-${trip.id}" class="card-bottom-section">
-                            <div class="text-gray-300 text-[11px] border-t border-gray-700/80 pt-2.5 space-y-1.5">
-                                <div class="flex flex-col gap-1">
-                                    <div class="flex justify-between items-center"><span><i class="fas fa-calendar-alt ml-1 text-teal-500"></i> <span class="text-[10px] text-gray-400">تاريخ الذهاب:</span> ${dateDisplay}</span><span class="${isExpired ? 'text-red-500 font-bold' : 'text-yellow-500'}"><i class="fas fa-hourglass-half ml-1"></i> ${remainingTime}</span></div>
-                                    <div class="flex justify-between items-center"><span><i class="far fa-clock ml-1 text-teal-500"></i> <span class="text-[10px] text-gray-400">الساعة:</span> ${timeDisplay}</span></div>
+                            <div class="text-gray-300 text-[9px] sm:text-[11px] border-t border-gray-700/80 pt-1.5 sm:pt-2.5 space-y-1">
+                                <div class="flex flex-col gap-0.5">
+                                    <div class="flex justify-between items-center">
+                                        <span><i class="fas fa-calendar-alt text-teal-500 ml-0.5"></i> ${dateDisplay}</span>
+                                        <span class="${isExpired ? 'text-red-500 font-bold' : 'text-yellow-500'}">${remainingTime}</span>
+                                    </div>
+                                    <div class="flex justify-between items-center text-gray-400">
+                                        <span><i class="far fa-clock text-teal-500 ml-0.5"></i> ${timeDisplay}</span>
+                                        <span>المقاعد: ${trip.availableSeats || '0'}</span>
+                                    </div>
                                 </div>
-                                <div class="flex justify-between border-t border-gray-700/50 pt-1.5 mt-1"><span><i class="fas fa-map-marker-alt ml-1 text-blue-500"></i> ${trip.location}</span><span><i class="fas fa-users ml-1 text-blue-500"></i> المقاعد: ${trip.availableSeats || '0'}</span></div>
+                                <div class="border-t border-gray-700/50 pt-1 text-gray-400 truncate">
+                                    <i class="fas fa-map-marker-alt text-blue-500 ml-0.5"></i> ${trip.location}
+                                </div>
                             </div>
                             
-                            <div class="flex items-center gap-2 mt-3">
-                                <button onclick="switchCardView('${trip.id}', 'options')" class="flex-grow bg-gradient-to-r from-teal-600 to-blue-600 hover:from-teal-700 text-white font-bold py-2 px-3 rounded-xl shadow text-xs flex justify-center items-center gap-2 transition-transform active:scale-95">
-                                    <i class="fas fa-ticket-alt"></i> احجز الآن
+                            <div class="flex items-center gap-1 sm:gap-2 mt-2 sm:mt-3">
+                                <button onclick="switchCardView('${trip.id}', 'options')" class="flex-grow bg-gradient-to-r from-teal-600 to-blue-600 hover:from-teal-700 text-white font-bold py-1.5 sm:py-2 px-1.5 sm:px-3 rounded-lg sm:rounded-xl shadow text-[10px] sm:text-xs flex justify-center items-center gap-1 transition-transform active:scale-95">
+                                    <i class="fas fa-ticket-alt text-[9px] sm:text-xs"></i> احجز الآن
                                 </button>
-                                <button onclick="shareTrip('${trip.title}', '?tripId=${trip.id}')" title="مشاركة الرحلة" class="w-9 h-9 flex-shrink-0 bg-gray-700 hover:bg-teal-600 text-white rounded-full flex items-center justify-center transition-all active:scale-90">
-                                    <i class="fas fa-share-alt text-xs"></i>
+                                <button onclick="shareTrip('${trip.title}', '?tripId=${trip.id}')" title="مشاركة الرحلة" class="w-7 h-7 sm:w-9 sm:h-9 flex-shrink-0 bg-gray-700 hover:bg-teal-600 text-white rounded-full flex items-center justify-center transition-all active:scale-90">
+                                    <i class="fas fa-share-alt text-[9px] sm:text-xs"></i>
                                 </button>
                             </div>
                         </div>
 
                         <!-- المرحلة 2: خيارات الحجز -->
-                        <div id="card-view-options-${trip.id}" class="hidden card-bottom-section border-t border-gray-700 pt-3">
-                            <h4 class="text-xs font-bold text-center text-teal-400 mb-2.5">كيف تفضل المتابعة؟</h4>
-                            <div class="flex flex-col gap-2">
-                                <a href="https://wa.me/${tripPhone}?text=${encodeURIComponent(`استفسار عن ${trip.title} (${trip.code || ''})`)}" target="_blank" class="w-full bg-teal-900/40 border border-teal-500/40 text-teal-300 hover:bg-teal-900/60 font-bold py-2 px-3 rounded-xl text-xs flex items-center justify-center gap-2 transition">
-                                    <i class="fab fa-whatsapp text-sm"></i> أحتاج إلى استفسار
+                        <div id="card-view-options-${trip.id}" class="hidden card-bottom-section border-t border-gray-700 pt-2">
+                            <h4 class="text-[10px] sm:text-xs font-bold text-center text-teal-400 mb-2">كيف تفضل المتابعة؟</h4>
+                            <div class="flex flex-col gap-1.5">
+                                <a href="https://wa.me/${tripPhone}?text=${encodeURIComponent(`استفسار عن ${trip.title} (${trip.code || ''})`)}" target="_blank" class="w-full bg-teal-900/40 border border-teal-500/40 text-teal-300 hover:bg-teal-900/60 font-bold py-1.5 px-2 rounded-lg text-[9px] sm:text-xs flex items-center justify-center gap-1 transition">
+                                    <i class="fab fa-whatsapp"></i> استفسار
                                 </a>
-                                <button onclick="switchCardView('${trip.id}', 'form')" class="w-full bg-gradient-to-r from-teal-600 to-blue-600 hover:from-teal-700 text-white font-bold py-2 px-3 rounded-xl shadow text-xs flex items-center justify-center gap-2 transition">
-                                    <i class="fas fa-check-circle text-sm"></i> أريد الحجز مباشرة
+                                <button onclick="switchCardView('${trip.id}', 'form')" class="w-full bg-gradient-to-r from-teal-600 to-blue-600 hover:from-teal-700 text-white font-bold py-1.5 px-2 rounded-lg shadow text-[9px] sm:text-xs flex items-center justify-center gap-1 transition">
+                                    <i class="fas fa-check-circle"></i> حجز مباشر
                                 </button>
-                                <button onclick="switchCardView('${trip.id}', 'default')" class="w-full text-center text-[11px] text-gray-400 hover:text-white pt-1">
-                                    <i class="fas fa-arrow-right ml-1"></i> تراجع
+                                <button onclick="switchCardView('${trip.id}', 'default')" class="w-full text-center text-[9px] sm:text-[11px] text-gray-400 hover:text-white pt-0.5">
+                                    <i class="fas fa-arrow-right ml-0.5"></i> تراجع
                                 </button>
                             </div>
                         </div>
 
-                        <!-- المرحلة 3: نموذج الحجز التفاعلي -->
-                        <div id="card-view-form-${trip.id}" class="hidden card-bottom-section border-t border-gray-700 pt-3">
-                            <div class="flex justify-between items-center mb-2">
-                                <span class="text-xs font-bold text-teal-400"><i class="fas fa-edit ml-1"></i> بيانات الحجز</span>
-                                <button onclick="switchCardView('${trip.id}', 'options')" class="text-gray-400 hover:text-white text-xs"><i class="fas fa-times"></i></button>
+                        <!-- المرحلة 3: نموذج الحجز التفاعلي المصغر -->
+                        <div id="card-view-form-${trip.id}" class="hidden card-bottom-section border-t border-gray-700 pt-2">
+                            <div class="flex justify-between items-center mb-1.5">
+                                <span class="text-[10px] sm:text-xs font-bold text-teal-400">بيانات الحجز</span>
+                                <button onclick="switchCardView('${trip.id}', 'options')" class="text-gray-400 hover:text-white text-[10px] sm:text-xs"><i class="fas fa-times"></i></button>
                             </div>
-                            <form onsubmit="submitInlineBooking(event, '${trip.id}', '${trip.title}', '${trip.price}', '${tripPhone}')" class="space-y-2">
-                                <div>
-                                    <input type="text" id="clientName-${trip.id}" placeholder="اسم العميل" required class="w-full bg-gray-900 border border-gray-700 rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-teal-500">
-                                </div>
-                                <div>
-                                    <input type="tel" id="clientPhone-${trip.id}" placeholder="رقم الهاتف (01xxxxxxxxx)" required class="w-full bg-gray-900 border border-gray-700 rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-teal-500 text-right">
-                                </div>
-                                <div class="grid grid-cols-2 gap-2">
+                            <form onsubmit="submitInlineBooking(event, '${trip.id}', '${trip.title}', '${trip.price}', '${tripPhone}')" class="space-y-1.5">
+                                <input type="text" id="clientName-${trip.id}" placeholder="الاسم" required class="w-full bg-gray-900 border border-gray-700 rounded-lg px-2 py-1 text-[10px] sm:text-xs text-white focus:outline-none focus:border-teal-500">
+                                <input type="tel" id="clientPhone-${trip.id}" placeholder="الهاتف" required class="w-full bg-gray-900 border border-gray-700 rounded-lg px-2 py-1 text-[10px] sm:text-xs text-white focus:outline-none focus:border-teal-500 text-right">
+                                <div class="grid grid-cols-2 gap-1">
                                     <div>
-                                        <label class="text-[10px] text-gray-400 block mb-0.5">عدد الأفراد</label>
-                                        <input type="number" id="clientCount-${trip.id}" min="1" value="1" oninput="updateTripCardTotal('${trip.id}', '${trip.price}')" required class="w-full bg-gray-900 border border-gray-700 rounded-lg px-2 py-1 text-xs text-white text-center">
+                                        <input type="number" id="clientCount-${trip.id}" min="1" value="1" placeholder="العدد" oninput="updateTripCardTotal('${trip.id}', '${trip.price}')" required class="w-full bg-gray-900 border border-gray-700 rounded-lg px-1.5 py-1 text-[10px] sm:text-xs text-white text-center">
                                     </div>
-                                    <div>
-                                        <label class="text-[10px] text-gray-400 block mb-0.5">الإجمالي</label>
-                                        <div id="clientTotal-${trip.id}" class="w-full bg-gray-900 border border-teal-500/30 rounded-lg px-2 py-1 text-xs text-teal-300 font-bold text-center">${parseFloat(trip.price||0).toLocaleString()} ج.م</div>
-                                    </div>
+                                    <div id="clientTotal-${trip.id}" class="w-full bg-gray-900 border border-teal-500/30 rounded-lg px-1 py-1 text-[10px] sm:text-xs text-teal-300 font-bold text-center flex items-center justify-center">${parseFloat(trip.price||0).toLocaleString()} ج.م</div>
                                 </div>
-                                <button type="submit" class="w-full bg-teal-600 hover:bg-teal-700 text-white font-bold py-2 rounded-xl text-xs flex items-center justify-center gap-1.5 shadow mt-1">
-                                    <i class="fab fa-whatsapp"></i> تأكيد وإرسال للحجز
+                                <button type="submit" class="w-full bg-teal-600 hover:bg-teal-700 text-white font-bold py-1.5 rounded-lg text-[10px] sm:text-xs flex items-center justify-center gap-1 shadow mt-1">
+                                    <i class="fab fa-whatsapp"></i> تأكيد وإرسال
                                 </button>
                             </form>
                         </div>
@@ -641,6 +682,15 @@
             });
             container.appendChild(fragment);
             observeVideos(container);
+
+            // إظهار أو إخفاء زر إظهار المزيد
+            if (loadMoreWrapper) {
+                if (trips.length > visibleTripsCount) {
+                    loadMoreWrapper.classList.remove('hidden');
+                } else {
+                    loadMoreWrapper.classList.add('hidden');
+                }
+            }
         }
 
         function checkUpcomingReminders() {
@@ -673,7 +723,7 @@
 
             if (images.length > 0) {
                 const allImages = [...images, ...images]; 
-                track.innerHTML = allImages.map(img => `<div class="relative w-44 h-28 md:w-56 md:h-36 mx-2 flex-shrink-0 rounded-xl overflow-hidden border border-gray-800 bg-gray-900 transform translate-z-0"><img src="${optimizeUrl(img.url)}" onclick="openLightbox('${img.url}')" loading="lazy" decoding="async" class="w-full h-full object-cover opacity-90 hover:opacity-100 cursor-pointer"></div>`).join('');
+                track.innerHTML = allImages.map(img => `<div class="relative w-36 h-24 sm:w-44 sm:h-28 md:w-56 md:h-36 mx-1.5 md:mx-2 flex-shrink-0 rounded-xl overflow-hidden border border-gray-800 bg-gray-900 transform translate-z-0"><img src="${optimizeUrl(img.url)}" onclick="openLightbox('${img.url}')" loading="lazy" decoding="async" class="w-full h-full object-cover opacity-90 hover:opacity-100 cursor-pointer"></div>`).join('');
             } else {
                 track.innerHTML = '';
             }
@@ -694,13 +744,57 @@
 
         function listenForTrips() { 
             onSnapshot(query(collection(db, tripsPath), orderBy("createdAt", "desc")), (snap) => { 
-                tripsData = []; snap.forEach(doc => tripsData.push({id: doc.id, ...doc.data()})); renderTrips(tripsData);
-                if (!initialLoadComplete) { if (snap.size > 0) { const countToCheck = Math.min(snap.size, 2); for (let i = 0; i < countToCheck; i++) { const tripDoc = snap.docs[i]; const tripData = tripDoc.data(); let history = JSON.parse(localStorage.getItem('notificationHistory') || "[]"); if (!history.some(n => n.tripId === tripDoc.id)) { const nowSeconds = Timestamp.now().seconds; const createdSeconds = tripData.createdAt ? tripData.createdAt.seconds : 0; if ((nowSeconds - createdSeconds) < 172800) { queueNewTripNotification(tripData.title, tripDoc.id); } } } } waitForImages(document.getElementById('trips-container')).then(() => { isTripsReady = true; tryRemoveLoader(); }); } 
-                else { snap.docChanges().forEach(change => { if (change.type === "added") { const newTrip = change.doc.data(); const nowSeconds = Timestamp.now().seconds; const createdSeconds = newTrip.createdAt ? newTrip.createdAt.seconds : 0; if (Math.abs(nowSeconds - createdSeconds) < 300) { notifyNewTripLive(newTrip.title, change.doc.id); } } }); waitForImages(document.getElementById('trips-container')); }
+                tripsData = []; snap.forEach(doc => tripsData.push({id: doc.id, ...doc.data()})); 
+                renderTrips(tripsData);
+                
+                // التأكد من تحميل الدفعة الأولى من الكروت وصورها قبل إزالة شاشة التحميل
+                if (!initialLoadComplete) { 
+                    if (snap.size > 0) { 
+                        const countToCheck = Math.min(snap.size, 2); 
+                        for (let i = 0; i < countToCheck; i++) { 
+                            const tripDoc = snap.docs[i]; 
+                            const tripData = tripDoc.data(); 
+                            let history = JSON.parse(localStorage.getItem('notificationHistory') || "[]"); 
+                            if (!history.some(n => n.tripId === tripDoc.id)) { 
+                                const nowSeconds = Timestamp.now().seconds; 
+                                const createdSeconds = tripData.createdAt ? tripData.createdAt.seconds : 0; 
+                                if ((nowSeconds - createdSeconds) < 172800) { 
+                                    queueNewTripNotification(tripData.title, tripDoc.id); 
+                                } 
+                            } 
+                        } 
+                    } 
+                    waitForImages(document.getElementById('trips-container')).then(() => { 
+                        isTripsReady = true; 
+                        tryRemoveLoader(); 
+                    }); 
+                } else { 
+                    snap.docChanges().forEach(change => { 
+                        if (change.type === "added") { 
+                            const newTrip = change.doc.data(); 
+                            const nowSeconds = Timestamp.now().seconds; 
+                            const createdSeconds = newTrip.createdAt ? newTrip.createdAt.seconds : 0; 
+                            if (Math.abs(nowSeconds - createdSeconds) < 300) { 
+                                notifyNewTripLive(newTrip.title, change.doc.id); 
+                            } 
+                        } 
+                    }); 
+                }
             }); 
         }
+
         function listenForBanner() { 
-            onSnapshot(query(collection(db, bannerPath), orderBy("createdAt", "desc")), (snap) => { bannerData = []; snap.forEach(doc => bannerData.push({id: doc.id, ...doc.data()})); renderBanner(bannerData); if (!initialLoadComplete) { waitForImages(document.getElementById('marquee-track')).then(() => { isBannerReady = true; tryRemoveLoader(); }); } }); 
+            onSnapshot(query(collection(db, bannerPath), orderBy("createdAt", "desc")), (snap) => { 
+                bannerData = []; 
+                snap.forEach(doc => bannerData.push({id: doc.id, ...doc.data()})); 
+                renderBanner(bannerData); 
+                if (!initialLoadComplete) { 
+                    waitForImages(document.getElementById('marquee-track')).then(() => { 
+                        isBannerReady = true; 
+                        tryRemoveLoader(); 
+                    }); 
+                } 
+            }); 
         }
 
         window.toggleMobileMenu = function() { document.getElementById('mobile-menu').classList.toggle('open'); }
@@ -711,7 +805,7 @@
 </head>
 <body class="min-h-screen relative text-gray-100 selection:bg-teal-500 selection:text-white">
 
-    <!-- شاشة التحميل مع استرجاع الإنارة المتوهجة -->
+    <!-- شاشة التحميل المتوهجة المتزامنة بدقة -->
     <div id="loader">
         <div class="relative flex items-center justify-center w-24 h-24 mb-6">
             <div class="absolute inset-0 border-4 border-gray-800 rounded-full"></div>
@@ -725,7 +819,6 @@
 
     <div id="toast-container" class="fixed top-20 left-1/2 -translate-x-1/2 z-[9999] flex flex-col gap-2 w-max max-w-[90vw] pointer-events-none"></div>
 
-    <!-- زر تثبيت التطبيق المصغر والمحدد بمؤقت 10 ثوانٍ -->
     <button id="installAppBtn" onclick="installApp()" class="hidden install-btn">
         <i class="fas fa-download text-xs"></i> تثبيت التطبيق
     </button>
@@ -741,8 +834,8 @@
     </div>
 
     <div class="relative z-10 flex flex-col min-h-screen">
-        <!-- الهيدر العلوي بنمط glass-theme -->
-        <nav class="glass-theme glass-nav sticky top-0 w-full flex items-center">
+        <!-- الهيدر العلوي دائري من أسفل الجانبين -->
+        <nav class="glass-theme glass-nav sticky top-0 w-full flex items-center rounded-b-2xl md:rounded-b-3xl border-b border-x shadow-xl">
             <div class="w-full px-4 md:px-8 flex justify-between items-center relative h-full">
                 <button onclick="window.location.reload()" class="flex-shrink-0 text-lg md:text-xl font-black text-white flex items-center gap-2 hover:text-teal-400">
                     <i class="fas fa-plane-departure text-teal-400"></i> <span id="companyName">Wolf TraVal</span>
@@ -762,7 +855,7 @@
             </div>
         </nav>
 
-        <!-- القائمة الجانبية متناسقة مع لون الهيدر -->
+        <!-- القائمة الجانبية -->
         <div id="mobile-menu" class="mobile-menu glass-theme fixed h-auto border-r border-b z-50 p-4 shadow-2xl flex flex-col gap-4 rounded-br-2xl">
             <div class="flex justify-between items-center border-b border-gray-700/60 pb-2">
                 <span class="text-sm font-bold text-white">القائمة</span>
@@ -792,7 +885,7 @@
             <div id="video-container" class="w-full"></div>
         </section>
 
-        <!-- زر تصفح العروض الحالية بعد الفيديو -->
+        <!-- زر تصفح العروض -->
         <div class="w-full flex justify-center mt-3 mb-8 px-4">
             <a href="#trips-section" class="inline-block bg-teal-600 hover:bg-teal-700 text-white font-bold py-2.5 px-7 rounded-full shadow-lg hover:scale-105 active:scale-95 transition-all text-xs md:text-sm">
                 تصفح العروض الحالية <i class="fas fa-chevron-down mr-1"></i>
@@ -801,16 +894,26 @@
         
         <!-- Trips Section -->
         <section id="trips-section" class="pt-0 pb-10">
-            <div class="container mx-auto px-4 md:px-6">
-                <div class="flex justify-between items-end mb-5">                    
-                    <div><h2 class="text-xl md:text-2xl font-bold text-white mb-1.5">الرحلات المتاحة</h2><div class="h-1 w-16 bg-teal-500 rounded"></div></div>
+            <div class="container mx-auto px-2 sm:px-4 md:px-6">
+                <div class="flex justify-between items-end mb-4 md:mb-5 px-1">                    
+                    <div><h2 class="text-lg md:text-2xl font-bold text-white mb-1">الرحلات المتاحة</h2><div class="h-1 w-12 md:w-16 bg-teal-500 rounded"></div></div>
                 </div>
-                <div id="trips-container" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6"></div>
+                
+                <!-- شبكة الرحلات (شريحتين بالموبايل و4 بالشاشات الكبيرة) -->
+                <div id="trips-container" class="grid grid-cols-2 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2.5 sm:gap-4 md:gap-6"></div>
+
+                <!-- زر إظهار المزيد في المنتصف -->
+                <div id="load-more-container" class="w-full flex justify-center mt-8 hidden">
+                    <button onclick="loadMoreTrips()" class="bg-gray-800/90 hover:bg-teal-600 text-teal-400 hover:text-white border border-teal-500/40 font-bold py-2.5 px-7 rounded-full text-xs sm:text-sm shadow-xl transition-all duration-200 active:scale-95 flex items-center gap-2">
+                        <span>إظهار المزيد من الرحلات</span>
+                        <i class="fas fa-chevron-down text-xs"></i>
+                    </button>
+                </div>
             </div>
         </section>
 
-        <!-- الفوتر بنفس درجة لون وتصميم الهيدر الزجاجي الأنيق -->
-        <footer class="glass-theme text-gray-400 py-6 border-t">
+        <!-- الفوتر بحواف دائرية من الأعلى الجانبين -->
+        <footer class="glass-theme text-gray-400 py-6 border-t border-x rounded-t-2xl md:rounded-t-3xl shadow-2xl mt-auto">
             <div class="container mx-auto px-4 flex flex-col items-center justify-center text-center">
                 
                 <div class="w-10 h-10 bg-teal-500/10 border border-teal-500/30 rounded-xl flex items-center justify-center text-teal-400 text-xl mb-1.5 shadow">
@@ -819,14 +922,12 @@
                 
                 <p class="text-base font-black text-white tracking-wide mb-1" id="footerCompanyName">Wolf TraVal</p>
                 
-                <!-- سطر الإدارة ومقر الشركة -->
                 <div class="text-[11px] text-gray-300 font-medium mb-3 flex flex-wrap items-center justify-center gap-x-3 gap-y-1">
                     <span><i class="fas fa-user-tie text-teal-400 ml-1"></i> إدارة: <strong class="text-white">أحمد موسي</strong></span>
                     <span class="text-gray-600">|</span>
                     <span><i class="fas fa-map-marker-alt text-teal-400 ml-1"></i> مقر الشركة: <strong class="text-white">شارع السلام الزقازيق</strong></span>
                 </div>
 
-                <!-- شريط الإحصائيات المناسب للزوار -->
                 <div class="flex items-center justify-center gap-3 mb-4 bg-white/5 border border-white/10 px-4 py-1.5 rounded-full text-xs">
                     <div class="flex items-center gap-1.5 text-gray-300">
                         <i class="fas fa-eye text-teal-400 text-[11px]"></i>
@@ -841,7 +942,6 @@
                     </div>
                 </div>
 
-                <!-- منصات التواصل الاجتماعي -->
                 <div class="flex items-center justify-center gap-4 mb-3">
                     <a href="#" target="_blank" class="w-8 h-8 rounded-full bg-white/5 hover:bg-green-600 hover:text-white text-gray-300 flex items-center justify-center text-sm transition wa-link" title="واتساب">
                         <i class="fab fa-whatsapp"></i>
