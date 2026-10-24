@@ -1,0 +1,686 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>لوحة التحكم المستقلة | Wolf TraVal</title>
+
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;900&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
+    <style>
+        body { font-family: 'Cairo', sans-serif; background-color: #0b1120; }
+        .ltr { direction: ltr; }
+        .tab-btn.active { background-color: #0d9488; color: white; border-color: #14b8a6; }
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-thumb { background: #374151; border-radius: 4px; }
+    </style>
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.3/firebase-app.js";
+        import { getFirestore, collection, addDoc, query, orderBy, Timestamp, onSnapshot, setDoc, doc, deleteDoc, updateDoc } from "https://www.gstatic.com/firebasejs/10.12.3/firebase-firestore.js";
+        import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.3/firebase-auth.js";
+
+        const ADMIN_UID = "GOMXxizbZEPRztWWzigk8CZNpvf2"; 
+        const CLOUD_NAME = "db9h7zm1h"; 
+        const UPLOAD_PRESET = "souq_upload"; 
+        const CLOUDINARY_URL = `https://api.cloudinary.com/v1_1/${CLOUD_NAME}/auto/upload`;
+
+        const firebaseConfig = {
+          apiKey: "AIzaSyCTo8DhvaAmNtV9OIgY5eLOeVgF7iQqlYk",
+          authDomain: "faculty-of-commerce-2025.firebaseapp.com",
+          databaseURL: "https://faculty-of-commerce-2025-default-rtdb.europe-west1.firebasedatabase.app",
+          projectId: "faculty-of-commerce-2025",
+          storageBucket: "faculty-of-commerce-2025.firebasestorage.app",
+          messagingSenderId: "312259778835",
+          appId: "1:312259778835:web:504299bb2de918596b62e6",
+          measurementId: "G-QJZB7E2D5R"
+        };
+
+        const tripsPath = `artifacts/${firebaseConfig.projectId}/public/data/trips`; 
+        const bannerPath = `artifacts/${firebaseConfig.projectId}/public/data/banner`; 
+
+        let db, auth;
+        let tripsData = [], bannerData = [];
+        let isEditing = false, editTripId = null, oldImages = [];
+
+        const app = initializeApp(firebaseConfig);
+        db = getFirestore(app);
+        auth = getAuth(app);
+
+        // Toast Messages
+        window.showToast = function(msg, type = "success") {
+            const toast = document.getElementById('admin-toast');
+            const icon = document.getElementById('toast-icon');
+            const text = document.getElementById('toast-text');
+            
+            toast.className = `fixed bottom-5 left-5 z-50 flex items-center gap-3 px-4 py-3 rounded-xl shadow-2xl border text-sm transition-all duration-300 transform translate-y-0 opacity-100 ${
+                type === 'error' ? 'bg-red-950/90 border-red-500 text-red-200' : 'bg-teal-950/90 border-teal-500 text-teal-200'
+            }`;
+            icon.className = `fas ${type === 'error' ? 'fa-exclamation-circle text-red-400' : 'fa-check-circle text-teal-400'}`;
+            text.textContent = msg;
+
+            setTimeout(() => {
+                toast.classList.add('translate-y-10', 'opacity-0');
+            }, 3500);
+        };
+
+        // Thumbnail helpers for admin (Fast w_400)
+        function getAdminThumb(url) {
+            if (!url) return 'https://via.placeholder.com/400x250';
+            if (url.includes('cloudinary.com')) {
+                if (isVideo(url)) {
+                    return url.replace('/video/upload/', '/video/upload/so_0,f_auto,q_auto,w_400/').replace(/\.[^/.]+$/, ".jpg");
+                }
+                return url.replace('/upload/', '/upload/f_auto,q_auto,w_400/');
+            }
+            return url;
+        }
+
+        function isVideo(url) { return url.match(/\.(mp4|webm|ogg|mov)$/i) || url.includes('/video/upload/'); }
+
+        async function uploadToCloudinary(file) {
+            const formData = new FormData(); formData.append('file', file); formData.append('upload_preset', UPLOAD_PRESET);
+            const response = await fetch(CLOUDINARY_URL, { method: 'POST', body: formData });
+            if (!response.ok) throw new Error("فشل الرفع");
+            const data = await response.json();
+            return data.secure_url;
+        }
+
+        // Auth state
+        onAuthStateChanged(auth, (user) => {
+            const loginView = document.getElementById('view-login');
+            const appView = document.getElementById('view-app');
+
+            if (user && user.uid === ADMIN_UID) {
+                loginView.classList.add('hidden');
+                appView.classList.remove('hidden');
+                initData();
+            } else {
+                loginView.classList.remove('hidden');
+                appView.classList.add('hidden');
+            }
+        });
+
+        window.loginAdmin = async function(e) {
+            e.preventDefault();
+            const btn = document.getElementById('loginBtn');
+            btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin ml-2"></i> جاري التحقق...';
+            try {
+                const cred = await signInWithEmailAndPassword(auth, document.getElementById('email').value, document.getElementById('password').value);
+                if (cred.user.uid !== ADMIN_UID) {
+                    await signOut(auth);
+                    showToast("حساب غير مصرح له بالإدارة", "error");
+                } else {
+                    showToast("تم الدخول بنجاح");
+                }
+            } catch (err) {
+                showToast("بيانات الدخول غير صحيحة", "error");
+            } finally {
+                btn.disabled = false; btn.innerHTML = "دخول اللوحة";
+            }
+        };
+
+        window.logoutAdmin = async function() {
+            await signOut(auth);
+            window.location.reload();
+        };
+
+        // Tabs switcher (No Popups!)
+        window.switchTab = function(tabName) {
+            document.querySelectorAll('.tab-content').forEach(el => el.classList.add('hidden'));
+            document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
+            
+            const targetContent = document.getElementById(`tab-content-${tabName}`);
+            const targetBtn = document.getElementById(`tab-btn-${tabName}`);
+            if (targetContent) targetContent.classList.remove('hidden');
+            if (targetBtn) targetBtn.classList.add('active');
+
+            // Scroll smoothly to top of workspace
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+        };
+
+        function initData() {
+            onSnapshot(query(collection(db, tripsPath), orderBy("createdAt", "desc")), (snap) => {
+                tripsData = []; snap.forEach(doc => tripsData.push({ id: doc.id, ...doc.data() }));
+                renderTripsTable();
+                updateStats();
+            });
+
+            onSnapshot(query(collection(db, bannerPath), orderBy("createdAt", "desc")), (snap) => {
+                bannerData = []; snap.forEach(doc => bannerData.push({ id: doc.id, ...doc.data() }));
+                renderBannerGrid();
+                updateStats();
+            });
+        }
+
+        function updateStats() {
+            document.getElementById('stat-total-trips').textContent = tripsData.length;
+            document.getElementById('stat-active-trips').textContent = tripsData.filter(t => t.status !== 'expired').length;
+            document.getElementById('stat-gallery-count').textContent = bannerData.length;
+        }
+
+        // Render Trips Table with Inline Delete Prompt
+        function renderTripsTable() {
+            const container = document.getElementById('trips-table-body');
+            if (!tripsData.length) {
+                container.innerHTML = `<tr><td colspan="5" class="py-12 text-center text-gray-500">لا توجد رحلات مضافة حالياً.</td></tr>`;
+                return;
+            }
+
+            container.innerHTML = tripsData.map(trip => {
+                const isExp = trip.status === 'expired';
+                const thumb = getAdminThumb(trip.mainImageUrl);
+                const isVid = isVideo(trip.mainImageUrl || '');
+
+                return `
+                <tr id="trip-row-${trip.id}" class="border-b border-gray-800 hover:bg-gray-800/40 transition">
+                    <td class="py-3 px-4">
+                        <div class="flex items-center gap-3">
+                            <div class="relative w-14 h-14 flex-shrink-0 rounded-lg overflow-hidden border border-gray-700 bg-gray-900">
+                                <img src="${thumb}" class="w-full h-full object-cover">
+                                ${isVid ? '<span class="absolute bottom-1 right-1 bg-black/80 text-teal-400 p-0.5 rounded text-[9px]"><i class="fas fa-video"></i></span>' : ''}
+                            </div>
+                            <div>
+                                <span class="font-bold text-white text-sm block">${trip.title}</span>
+                                <span class="text-xs text-gray-400"><i class="fas fa-map-marker-alt text-teal-500 ml-1"></i>${trip.location || 'غير محدد'}</span>
+                            </div>
+                        </div>
+                    </td>
+                    <td class="py-3 px-4 text-sm font-semibold text-teal-400">${trip.price} ج.م</td>
+                    <td class="py-3 px-4">
+                        <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold ${isExp ? 'bg-red-900/40 text-red-400 border border-red-500/30' : 'bg-green-900/40 text-green-400 border border-green-500/30'}">
+                            ${isExp ? 'منتهية' : 'نشطة'}
+                        </span>
+                    </td>
+                    <td class="py-3 px-4 text-xs text-gray-400">${trip.departureDate ? new Date(trip.departureDate).toLocaleDateString('ar-EG') : 'غير محدد'}</td>
+                    <td class="py-3 px-4">
+                        <!-- منطقة الإجراءات العادية -->
+                        <div id="actions-default-${trip.id}" class="flex items-center gap-1.5 justify-end">
+                            <button onclick="toggleTripStatus('${trip.id}', '${isExp ? 'active' : 'expired'}')" class="p-2 rounded-lg text-xs bg-gray-800 hover:bg-gray-700 text-yellow-400 border border-gray-700" title="تبديل الحالة">
+                                <i class="fas ${isExp ? 'fa-check' : 'fa-ban'}"></i>
+                            </button>
+                            <button onclick="startEditTrip('${trip.id}')" class="p-2 rounded-lg text-xs bg-gray-800 hover:bg-gray-700 text-blue-400 border border-gray-700" title="تعديل">
+                                <i class="fas fa-edit"></i>
+                            </button>
+                            <button onclick="showInlineDelete('${trip.id}', true)" class="p-2 rounded-lg text-xs bg-gray-800 hover:bg-gray-700 text-red-400 border border-gray-700" title="حذف">
+                                <i class="fas fa-trash-alt"></i>
+                            </button>
+                        </div>
+                        <!-- منطقة تأكيد الحذف الداخلي المضمن (بدون Popup) -->
+                        <div id="actions-delete-${trip.id}" class="hidden flex items-center gap-2 justify-end bg-red-950/60 p-1.5 rounded-lg border border-red-500/40">
+                            <span class="text-[11px] text-red-200">تأكيد الحذف؟</span>
+                            <button onclick="deleteTripDirect('${trip.id}')" class="px-2 py-0.5 bg-red-600 hover:bg-red-700 text-white rounded text-[11px] font-bold">نعم</button>
+                            <button onclick="showInlineDelete('${trip.id}', false)" class="px-2 py-0.5 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded text-[11px]">إلغاء</button>
+                        </div>
+                    </td>
+                </tr>`;
+            }).join('');
+        }
+
+        window.showInlineDelete = function(tripId, show) {
+            const def = document.getElementById(`actions-default-${tripId}`);
+            const del = document.getElementById(`actions-delete-${tripId}`);
+            if (show) { def.classList.add('hidden'); del.classList.remove('hidden'); }
+            else { def.classList.remove('hidden'); del.classList.add('hidden'); }
+        };
+
+        window.deleteTripDirect = async function(tripId) {
+            try {
+                await deleteDoc(doc(db, tripsPath, tripId));
+                showToast("تم حذف الرحلة بنجاح");
+            } catch(e) {
+                showToast("فشل الحذف", "error");
+            }
+        };
+
+        window.toggleTripStatus = async function(id, status) {
+            try {
+                await setDoc(doc(db, tripsPath, id), { status }, { merge: true });
+                showToast("تم تحديث حالة الرحلة بنجاح");
+            } catch(e) {
+                showToast("حدث خطأ", "error");
+            }
+        };
+
+        // Edit Trip in tab form directly
+        window.startEditTrip = function(id) {
+            const trip = tripsData.find(t => t.id === id);
+            if (!trip) return;
+
+            isEditing = true;
+            editTripId = id;
+            oldImages = Array.isArray(trip.images) ? trip.images : (trip.mainImageUrl ? [trip.mainImageUrl] : []);
+
+            document.getElementById('form-trip-title').value = trip.title;
+            document.getElementById('form-trip-location').value = trip.location;
+            document.getElementById('form-trip-price').value = trip.price;
+            document.getElementById('form-trip-phone').value = trip.whatsappPhone || '';
+            document.getElementById('form-trip-date').value = trip.departureDate || '';
+            document.getElementById('form-trip-seats').value = trip.availableSeats || 0;
+            document.getElementById('form-trip-desc').value = trip.description || '';
+
+            document.getElementById('trip-form-heading').textContent = "تعديل بيانات الرحلة";
+            document.getElementById('trip-form-submit').textContent = "حفظ التعديلات";
+            document.getElementById('trip-form-cancel').classList.remove('hidden');
+
+            switchTab('add-trip');
+        };
+
+        window.cancelTripEdit = function() {
+            isEditing = false;
+            editTripId = null;
+            oldImages = [];
+            document.getElementById('tripForm').reset();
+            document.getElementById('trip-form-heading').textContent = "إضافة رحلة جديدة";
+            document.getElementById('trip-form-submit').textContent = "نشر الرحلة الآن";
+            document.getElementById('trip-form-cancel').classList.add('hidden');
+            switchTab('trips');
+        };
+
+        window.handleTripFormSubmit = async function(e) {
+            e.preventDefault();
+            const btn = document.getElementById('trip-form-submit');
+            const orig = btn.innerHTML;
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin ml-2"></i> جاري المعالجة والرفع...';
+            btn.disabled = true;
+
+            const title = document.getElementById('form-trip-title').value;
+            const price = document.getElementById('form-trip-price').value;
+            const location = document.getElementById('form-trip-location').value;
+            const whatsappPhone = document.getElementById('form-trip-phone').value;
+            const description = document.getElementById('form-trip-desc').value;
+            const departureDate = document.getElementById('form-trip-date').value;
+            const availableSeats = parseInt(document.getElementById('form-trip-seats').value) || 0;
+            const nights = document.getElementById('form-trip-nights').value;
+            const days = document.getElementById('form-trip-days').value;
+            const durationText = `${days} أيام / ${nights} ليالي`;
+
+            const files = document.getElementById('form-trip-files').files;
+            let imagesArray = isEditing ? [...oldImages] : [];
+
+            try {
+                if (files.length > 0) {
+                    const uploadPromises = Array.from(files).map(f => uploadToCloudinary(f));
+                    const newUrls = await Promise.all(uploadPromises);
+                    imagesArray = isEditing ? [...imagesArray, ...newUrls] : newUrls;
+                } else if (!isEditing && imagesArray.length === 0) {
+                    showToast("يرجى اختيار صورة واحدة على الأقل للرحلة", "error");
+                    btn.innerHTML = orig; btn.disabled = false;
+                    return;
+                }
+
+                const tripData = {
+                    title, price, location, whatsappPhone, description, departureDate, availableSeats, durationText,
+                    mainImageUrl: imagesArray[0],
+                    images: imagesArray
+                };
+
+                if (isEditing) {
+                    await updateDoc(doc(db, tripsPath, editTripId), tripData);
+                    showToast("تم تحديث بيانات الرحلة بنجاح");
+                } else {
+                    const code = 'TRIP-' + Math.floor(1000 + Math.random() * 9000);
+                    await addDoc(collection(db, tripsPath), {
+                        ...tripData,
+                        code,
+                        status: 'active',
+                        createdAt: Timestamp.now()
+                    });
+                    showToast("تمت إضافة ونشر الرحلة بنجاح");
+                }
+
+                cancelTripEdit();
+            } catch (err) {
+                showToast("حدث خطأ أثناء الحفظ", "error");
+            } finally {
+                btn.innerHTML = orig; btn.disabled = false;
+            }
+        };
+
+        // Banner Gallery Section
+        function renderBannerGrid() {
+            const container = document.getElementById('banner-grid');
+            if (!bannerData.length) {
+                container.innerHTML = `<div class="col-span-full py-8 text-center text-gray-500">لا توجد وسائط بالمعرض حالياً.</div>`;
+                return;
+            }
+
+            container.innerHTML = bannerData.map(item => {
+                const thumb = getAdminThumb(item.url);
+                const isVid = isVideo(item.url);
+
+                return `
+                <div class="relative group rounded-xl overflow-hidden border border-gray-800 bg-gray-900 aspect-video">
+                    <img src="${thumb}" class="w-full h-full object-cover">
+                    ${isVid ? '<span class="absolute top-2 left-2 bg-black/80 text-teal-400 px-1.5 py-0.5 rounded text-[10px]"><i class="fas fa-video ml-1"></i>فيديو</span>' : ''}
+                    <div class="absolute inset-0 bg-black/70 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center p-2">
+                        <button onclick="deleteBannerDirect('${item.id}')" class="px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white rounded-lg text-xs font-bold shadow flex items-center gap-1.5">
+                            <i class="fas fa-trash-alt"></i> حذف الوسيط
+                        </button>
+                    </div>
+                </div>`;
+            }).join('');
+        }
+
+        window.deleteBannerDirect = async function(id) {
+            try {
+                await deleteDoc(doc(db, bannerPath, id));
+                showToast("تم حذف الوسيط من المعرض");
+            } catch(e) {
+                showToast("حدث خطأ أثناء الحذف", "error");
+            }
+        };
+
+        window.handleBannerUpload = async function(e) {
+            e.preventDefault();
+            const files = document.getElementById('banner-upload-files').files;
+            if (!files.length) return;
+            const btn = document.getElementById('banner-upload-btn');
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin ml-2"></i> جاري الرفع...';
+            btn.disabled = true;
+
+            try {
+                const urls = await Promise.all([...files].map(f => uploadToCloudinary(f)));
+                await Promise.all(urls.map(url => addDoc(collection(db, bannerPath), { url, createdAt: Timestamp.now() })));
+                document.getElementById('bannerUploadForm').reset();
+                document.getElementById('banner-upload-preview').innerHTML = '';
+                showToast("تم رفع الوسائط بنجاح");
+            } catch(err) {
+                showToast("فشل رفع بعض الوسائط", "error");
+            } finally {
+                btn.innerHTML = '<i class="fas fa-cloud-upload-alt ml-1"></i> بدء الرفع إلى المعرض';
+                btn.disabled = false;
+            }
+        };
+
+        window.previewBannerSelection = function(e) {
+            const preview = document.getElementById('banner-upload-preview');
+            preview.innerHTML = [...e.target.files].map(f => `
+                <div class="w-16 h-16 rounded border border-gray-700 overflow-hidden bg-gray-900 flex items-center justify-center text-xs text-gray-400">
+                    ${f.type.startsWith('video') ? '<i class="fas fa-video text-teal-400 text-lg"></i>' : `<img src="${URL.createObjectURL(f)}" class="w-full h-full object-cover">`}
+                </div>
+            `).join('');
+        };
+    </script>
+</head>
+<body class="min-h-screen text-gray-100 flex flex-col">
+
+    <!-- Toast Notification (Internal) -->
+    <div id="admin-toast" class="fixed bottom-5 left-5 z-50 flex items-center gap-3 px-4 py-3 rounded-xl shadow-2xl border text-sm transition-all duration-300 transform translate-y-10 opacity-0 pointer-events-none">
+        <i id="toast-icon" class="fas fa-check-circle"></i>
+        <span id="toast-text">رسالة إشعار</span>
+    </div>
+
+    <!-- 1. شاشة تسجيل الدخول -->
+    <div id="view-login" class="flex-grow flex items-center justify-center p-4">
+        <div class="bg-gray-900 border border-gray-800 p-8 rounded-2xl shadow-2xl w-full max-w-sm">
+            <div class="text-center mb-6">
+                <div class="w-14 h-14 bg-teal-500/10 border border-teal-500/30 rounded-2xl flex items-center justify-center mx-auto mb-3 text-teal-400 text-xl">
+                    <i class="fas fa-user-shield"></i>
+                </div>
+                <h2 class="text-xl font-black text-white">إدارة Wolf TraVal</h2>
+                <p class="text-xs text-gray-400 mt-1">سجل الدخول للمتابعة</p>
+            </div>
+            <form onsubmit="loginAdmin(event)" class="space-y-4">
+                <div>
+                    <label class="block text-xs text-gray-400 mb-1">البريد الإلكتروني</label>
+                    <input type="email" id="email" required class="w-full bg-gray-800 border border-gray-700 rounded-xl px-3.5 py-2.5 text-white text-sm focus:outline-none focus:border-teal-500 ltr" placeholder="admin@domain.com">
+                </div>
+                <div>
+                    <label class="block text-xs text-gray-400 mb-1">كلمة المرور</label>
+                    <input type="password" id="password" required class="w-full bg-gray-800 border border-gray-700 rounded-xl px-3.5 py-2.5 text-white text-sm focus:outline-none focus:border-teal-500 ltr" placeholder="••••••••">
+                </div>
+                <button type="submit" id="loginBtn" class="w-full bg-teal-600 hover:bg-teal-700 text-white font-bold py-3 rounded-xl text-sm transition shadow-lg">دخول اللوحة</button>
+            </form>
+            <div class="mt-5 text-center">
+                <a href="index.html" class="text-xs text-gray-500 hover:text-teal-400"><i class="fas fa-arrow-right ml-1"></i> العودة للموقع</a>
+            </div>
+        </div>
+    </div>
+
+    <!-- 2. واجهة لوحة التحكم الكاملة (بدون أي نوافذ منبثقة) -->
+    <div id="view-app" class="hidden flex-grow flex flex-col">
+        <!-- Header -->
+        <header class="bg-gray-900 border-b border-gray-800 sticky top-0 z-40">
+            <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+                <div class="flex items-center gap-3">
+                    <div class="w-9 h-9 bg-teal-500/20 text-teal-400 rounded-xl flex items-center justify-center font-bold">
+                        <i class="fas fa-plane"></i>
+                    </div>
+                    <div>
+                        <h1 class="font-black text-base text-white leading-none">Wolf TraVal</h1>
+                        <span class="text-[10px] text-teal-400 font-semibold">لوحة الإدارة الداخلية</span>
+                    </div>
+                </div>
+                <div class="flex items-center gap-2">
+                    <a href="index.html" target="_blank" class="px-3 py-1.5 rounded-lg border border-gray-700 bg-gray-800 text-gray-300 hover:text-white text-xs font-semibold transition flex items-center gap-1.5">
+                        <i class="fas fa-external-link-alt text-[10px]"></i> زيارة الموقع
+                    </a>
+                    <button onclick="logoutAdmin()" class="px-3 py-1.5 rounded-lg border border-red-500/30 bg-red-900/20 text-red-400 hover:bg-red-900/40 text-xs font-semibold transition flex items-center gap-1.5">
+                        <i class="fas fa-sign-out-alt text-[10px]"></i> خروج
+                    </button>
+                </div>
+            </div>
+        </header>
+
+        <!-- Subnav / Tab Switchers -->
+        <div class="bg-gray-900/70 border-b border-gray-800 sticky top-16 z-30">
+            <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex items-center gap-2 py-2 overflow-x-auto">
+                <button id="tab-btn-overview" onclick="switchTab('overview')" class="tab-btn active px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-2 text-gray-300 hover:text-white">
+                    <i class="fas fa-chart-pie"></i> الإحصائيات
+                </button>
+                <button id="tab-btn-trips" onclick="switchTab('trips')" class="tab-btn px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-2 text-gray-300 hover:text-white">
+                    <i class="fas fa-suitcase-rolling"></i> إدارة الرحلات
+                </button>
+                <button id="tab-btn-add-trip" onclick="switchTab('add-trip')" class="tab-btn px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-2 text-gray-300 hover:text-white">
+                    <i class="fas fa-plus-circle"></i> إضافة رحلة جديدة
+                </button>
+                <button id="tab-btn-gallery" onclick="switchTab('gallery')" class="tab-btn px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-2 text-gray-300 hover:text-white">
+                    <i class="fas fa-images"></i> معرض الوسائط
+                </button>
+            </div>
+        </div>
+
+        <!-- Main Workspace -->
+        <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 flex-grow w-full">
+
+            <!-- تبويب 1: الإحصائيات -->
+            <div id="tab-content-overview" class="tab-content space-y-6">
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div class="bg-gray-900 border border-gray-800 p-5 rounded-2xl flex items-center justify-between">
+                        <div>
+                            <span class="text-xs text-gray-400 font-semibold block">إجمالي الرحلات</span>
+                            <span id="stat-total-trips" class="text-3xl font-black text-white mt-1 block">0</span>
+                        </div>
+                        <div class="w-12 h-12 rounded-xl bg-teal-500/10 text-teal-400 flex items-center justify-center text-xl">
+                            <i class="fas fa-plane-departure"></i>
+                        </div>
+                    </div>
+                    <div class="bg-gray-900 border border-gray-800 p-5 rounded-2xl flex items-center justify-between">
+                        <div>
+                            <span class="text-xs text-gray-400 font-semibold block">الرحلات النشطة حالياً</span>
+                            <span id="stat-active-trips" class="text-3xl font-black text-emerald-400 mt-1 block">0</span>
+                        </div>
+                        <div class="w-12 h-12 rounded-xl bg-emerald-500/10 text-emerald-400 flex items-center justify-center text-xl">
+                            <i class="fas fa-check-circle"></i>
+                        </div>
+                    </div>
+                    <div class="bg-gray-900 border border-gray-800 p-5 rounded-2xl flex items-center justify-between">
+                        <div>
+                            <span class="text-xs text-gray-400 font-semibold block">وسائط المعرض والبانر</span>
+                            <span id="stat-gallery-count" class="text-3xl font-black text-blue-400 mt-1 block">0</span>
+                        </div>
+                        <div class="w-12 h-12 rounded-xl bg-blue-500/10 text-blue-400 flex items-center justify-center text-xl">
+                            <i class="fas fa-photo-video"></i>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="bg-gray-900 border border-gray-800 p-6 rounded-2xl">
+                    <h3 class="font-bold text-white text-base mb-2">إجراءات سريعة</h3>
+                    <p class="text-xs text-gray-400 mb-4">يمكنك التنقل مباشرة لأي قسم عبر الروابط التالية دون الحاجة لفتح صفحات جديدة.</p>
+                    <div class="flex flex-wrap gap-3">
+                        <button onclick="switchTab('add-trip')" class="px-4 py-2.5 bg-teal-600 hover:bg-teal-700 text-white rounded-xl text-xs font-bold flex items-center gap-2 transition">
+                            <i class="fas fa-plus"></i> إنشاء رحلة جديدة
+                        </button>
+                        <button onclick="switchTab('trips')" class="px-4 py-2.5 bg-gray-800 hover:bg-gray-700 text-gray-200 rounded-xl text-xs font-bold flex items-center gap-2 transition">
+                            <i class="fas fa-list"></i> استعراض وتعديل الرحلات
+                        </button>
+                        <button onclick="switchTab('gallery')" class="px-4 py-2.5 bg-gray-800 hover:bg-gray-700 text-gray-200 rounded-xl text-xs font-bold flex items-center gap-2 transition">
+                            <i class="fas fa-upload"></i> رفع وسائط للبانر
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- تبويب 2: إدارة الرحلات (جدول داخلي كامل) -->
+            <div id="tab-content-trips" class="tab-content hidden space-y-4">
+                <div class="flex justify-between items-center">
+                    <div>
+                        <h2 class="text-lg font-bold text-white">قائمة الرحلات</h2>
+                        <p class="text-xs text-gray-400">تعديل أو تنشيط أو حذف الرحلات الحالية</p>
+                    </div>
+                    <button onclick="switchTab('add-trip')" class="px-3.5 py-2 bg-teal-600 hover:bg-teal-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 transition">
+                        <i class="fas fa-plus"></i> إضافة رحلة
+                    </button>
+                </div>
+
+                <div class="bg-gray-900 border border-gray-800 rounded-2xl overflow-hidden shadow-xl">
+                    <div class="overflow-x-auto">
+                        <table class="w-full text-right border-collapse">
+                            <thead>
+                                <tr class="bg-gray-800/60 text-gray-400 text-xs border-b border-gray-800">
+                                    <th class="py-3 px-4 font-bold">الرحلة</th>
+                                    <th class="py-3 px-4 font-bold">السعر</th>
+                                    <th class="py-3 px-4 font-bold">الحالة</th>
+                                    <th class="py-3 px-4 font-bold">تاريخ الذهاب</th>
+                                    <th class="py-3 px-4 font-bold text-left">إجراءات</th>
+                                </tr>
+                            </thead>
+                            <tbody id="trips-table-body" class="divide-y divide-gray-800/60"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <!-- تبويب 3: نموذج إضافة / تعديل رحلة (مدمج داخلياً بدون Popup) -->
+            <div id="tab-content-add-trip" class="tab-content hidden">
+                <div class="bg-gray-900 border border-gray-800 rounded-2xl p-6 max-w-3xl mx-auto shadow-xl">
+                    <div class="flex justify-between items-center mb-6 border-b border-gray-800 pb-4">
+                        <div>
+                            <h2 id="trip-form-heading" class="text-lg font-bold text-white">إضافة رحلة جديدة</h2>
+                            <p class="text-xs text-gray-400 mt-0.5">املأ البيانات أدناه وسيتم نشر الرحلة تلقائياً في الصفحة الرئيسية</p>
+                        </div>
+                        <button id="trip-form-cancel" type="button" onclick="cancelTripEdit()" class="hidden px-3 py-1.5 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-xl text-xs font-semibold">
+                            إلغاء التعديل
+                        </button>
+                    </div>
+
+                    <form id="tripForm" onsubmit="handleTripFormSubmit(event)" class="space-y-4">
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div>
+                                <label class="block text-xs text-gray-400 mb-1">عنوان الرحلة</label>
+                                <input type="text" id="form-trip-title" required class="w-full bg-gray-800 border border-gray-700 rounded-xl px-3.5 py-2.5 text-white text-sm focus:outline-none focus:border-teal-500" placeholder="مثال: رحلة دهب وشرم الشيخ">
+                            </div>
+                            <div>
+                                <label class="block text-xs text-gray-400 mb-1">المكان / الوجهة</label>
+                                <input type="text" id="form-trip-location" required class="w-full bg-gray-800 border border-gray-700 rounded-xl px-3.5 py-2.5 text-white text-sm focus:outline-none focus:border-teal-500" placeholder="مثال: دهب - جنوب سيناء">
+                            </div>
+                        </div>
+
+                        <div class="grid grid-cols-2 gap-4">
+                            <div>
+                                <label class="block text-xs text-gray-400 mb-1">سعر الفرد (ج.م)</label>
+                                <input type="number" id="form-trip-price" required class="w-full bg-gray-800 border border-gray-700 rounded-xl px-3.5 py-2.5 text-white text-sm focus:outline-none focus:border-teal-500">
+                            </div>
+                            <div>
+                                <label class="block text-xs text-teal-400 mb-1">رقم الحجز (واتساب)</label>
+                                <input type="text" id="form-trip-phone" required class="w-full bg-gray-800 border border-teal-500/40 rounded-xl px-3.5 py-2.5 text-white text-sm focus:outline-none focus:border-teal-500 ltr" placeholder="201xxxxxxxxx">
+                            </div>
+                        </div>
+
+                        <div class="grid grid-cols-2 gap-4">
+                            <div>
+                                <label class="block text-xs text-gray-400 mb-1">تاريخ وموعد الذهاب</label>
+                                <input type="datetime-local" id="form-trip-date" required class="w-full bg-gray-800 border border-gray-700 rounded-xl px-3.5 py-2.5 text-white text-sm focus:outline-none focus:border-teal-500 ltr">
+                            </div>
+                            <div>
+                                <label class="block text-xs text-gray-400 mb-1">المقاعد المتاحة</label>
+                                <input type="number" id="form-trip-seats" required class="w-full bg-gray-800 border border-gray-700 rounded-xl px-3.5 py-2.5 text-white text-sm focus:outline-none focus:border-teal-500">
+                            </div>
+                        </div>
+
+                        <div class="grid grid-cols-2 gap-4">
+                            <div>
+                                <label class="block text-xs text-gray-400 mb-1">عدد الأيام</label>
+                                <select id="form-trip-days" class="w-full bg-gray-800 border border-gray-700 rounded-xl px-3.5 py-2.5 text-white text-sm focus:outline-none focus:border-teal-500">
+                                    <option value="1">1 يوم</option>
+                                    <option value="2">2 يوم</option>
+                                    <option value="3">3 أيام</option>
+                                    <option value="4" selected>4 أيام</option>
+                                    <option value="5">5 أيام</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label class="block text-xs text-gray-400 mb-1">عدد الليالي</label>
+                                <select id="form-trip-nights" class="w-full bg-gray-800 border border-gray-700 rounded-xl px-3.5 py-2.5 text-white text-sm focus:outline-none focus:border-teal-500">
+                                    <option value="0">بدون مبيت</option>
+                                    <option value="1">1 ليلة</option>
+                                    <option value="2">2 ليلة</option>
+                                    <option value="3" selected>3 ليالي</option>
+                                    <option value="4">4 ليالي</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <div>
+                            <label class="block text-xs text-gray-400 mb-1">وصف وبرنامج الرحلة</label>
+                            <textarea id="form-trip-desc" rows="4" required class="w-full bg-gray-800 border border-gray-700 rounded-xl px-3.5 py-2.5 text-white text-sm focus:outline-none focus:border-teal-500" placeholder="اكتب تفاصيل الإقامة، الانتقالات، والأنشطة..."></textarea>
+                        </div>
+
+                        <div class="bg-gray-800/70 p-4 rounded-xl border border-gray-700">
+                            <label class="block text-xs font-bold text-gray-300 mb-1.5">رفع صور / فيديو للرحلة</label>
+                            <input type="file" id="form-trip-files" multiple accept="image/*,video/*" class="w-full text-xs text-gray-400 file:bg-teal-600 file:text-white file:border-0 file:rounded-lg file:px-3 file:py-1.5">
+                        </div>
+
+                        <div class="pt-2">
+                            <button type="submit" id="trip-form-submit" class="w-full bg-teal-600 hover:bg-teal-700 text-white font-bold py-3.5 rounded-xl text-sm transition shadow-lg">
+                                نشر الرحلة الآن
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+
+            <!-- تبويب 4: معرض الوسائط والبانر (رفع واستعراض مدمج) -->
+            <div id="tab-content-gallery" class="tab-content hidden space-y-6">
+                <!-- أداة الرفع المباشرة -->
+                <div class="bg-gray-900 border border-gray-800 p-6 rounded-2xl shadow-xl">
+                    <h2 class="text-base font-bold text-white mb-1">رفع وسائط جديدة للبانر والمعرض</h2>
+                    <p class="text-xs text-gray-400 mb-4">الصور تظهر في شريط البانر العلوي، ومقاطع الفيديو تظهر في حاوية الفيديو الترويجية</p>
+                    
+                    <form id="bannerUploadForm" onsubmit="handleBannerUpload(event)" class="space-y-4">
+                        <div class="bg-gray-800/60 p-4 rounded-xl border border-gray-700">
+                            <input type="file" id="banner-upload-files" multiple accept="image/*,video/*" onchange="previewBannerSelection(event)" required class="w-full text-xs text-gray-400 file:bg-blue-600 file:text-white file:border-0 file:rounded-lg file:px-3 file:py-1.5">
+                        </div>
+                        <div id="banner-upload-preview" class="flex flex-wrap gap-2"></div>
+                        <button type="submit" id="banner-upload-btn" class="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-xl transition shadow">
+                            <i class="fas fa-cloud-upload-alt ml-1"></i> بدء الرفع إلى المعرض
+                        </button>
+                    </form>
+                </div>
+
+                <!-- استعراض الوسائط الحالية -->
+                <div class="bg-gray-900 border border-gray-800 p-6 rounded-2xl shadow-xl">
+                    <h3 class="text-base font-bold text-white mb-4">الوسائط المنشورة حالياً</h3>
+                    <div id="banner-grid" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3"></div>
+                </div>
+            </div>
+
+        </main>
+    </div>
+
+</body>
+</html>
